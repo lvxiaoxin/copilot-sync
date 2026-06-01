@@ -1,0 +1,35 @@
+{
+  "name": "agent-sync-cli",
+  "version": "0.1.0",
+  "description": "Cross-platform CLI to sync AI agent config artifacts (Copilot, Claude, Codex) across devboxes via a GitHub repo.",
+  "type": "module",
+  "bin": {
+    "agent-sync": "bin/agent-sync.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node bin/agent-sync.js"
+  },
+  "keywords": [
+    "agent",
+    "sync",
+    "copilot",
+    "claude",
+    "codex",
+    "mcp",
+    "skills",
+    "cli",
+    "cross-platform"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0"
+  }
+}
