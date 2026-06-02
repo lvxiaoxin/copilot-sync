@@ -15,6 +15,7 @@ import {
 } from '../fsutil.js';
 import { ensureGitAvailable } from '../git.js';
 import { ensureRepoReady } from '../repo.js';
+import { renderTree } from '../tree.js';
 
 const META_FILE = '.agent-sync-meta.json';
 const KEEP_BACKUPS = 20;
@@ -57,12 +58,14 @@ export async function pull(opts = {}) {
   let unchanged = 0;
   let skippedLocked = 0;
 
-  log.plain(c.bold('agent-sync pull'));
+  log.plain(c.bold('agent-sync pull') + (opts.dryRun ? c.dim('  (dry run)') : ''));
+  log.plain('');
 
   for (const agent of agents) {
     const agentRepo = path.join(dir, agent);
     if (!exists(agentRepo)) {
-      log.info(`${c.cyan(agent)}: ${c.dim('not present in remote yet — skipped')}`);
+      log.plain(`${c.cyan(agent)} ${c.dim('(not in remote yet — skipped)')}`);
+      if (opts.dryRun) log.plain('');
       continue;
     }
 
@@ -78,6 +81,7 @@ export async function pull(opts = {}) {
     }
 
     let agentWrote = 0;
+    const dryEntries = [];
     for (const node of walk(agentRepo, '', ['**/.git/**'])) {
       if (node.type !== 'file') continue;
       const rel = node.rel;
@@ -110,7 +114,7 @@ export async function pull(opts = {}) {
       }
 
       if (opts.dryRun) {
-        log.plain(`  ${destExists ? c.yellow('overwrite') : c.green('new')}  ${agent}/${rel}`);
+        dryEntries.push({ path: rel, tag: destExists ? 'overwrite' : 'new' });
         if (destExists) overwritten++;
         else wrote++;
         agentWrote++;
@@ -142,12 +146,28 @@ export async function pull(opts = {}) {
       }
     }
 
-    log.info(`${c.cyan(agent)}: ${agentWrote} file(s) ${opts.dryRun ? 'to apply' : 'applied'}`);
+    if (opts.dryRun) {
+      const label = agentWrote
+        ? `${c.cyan(agent)} ${c.dim(`(${agentWrote} to apply)`)}`
+        : `${c.cyan(agent)} ${c.dim('(no changes)')}`;
+      log.plain(label);
+      for (const line of renderTree(dryEntries)) log.plain(line);
+      log.plain('');
+    } else {
+      log.info(`${c.cyan(agent)}: ${agentWrote} file(s) applied`);
+    }
   }
 
   if (opts.dryRun) {
-    log.plain('');
-    log.info(c.dim(`Dry run — ${wrote} new, ${overwritten} overwrite, ${unchanged} unchanged.`));
+    const parts = [];
+    if (wrote) parts.push(c.green(`${wrote} new`));
+    if (overwritten) parts.push(c.yellow(`${overwritten} overwrite`));
+    parts.push(c.dim(`${unchanged} unchanged`));
+    log.plain(c.dim('Dry run — no changes written. ') + parts.join(c.dim(', ')) + c.dim('.'));
+    if (overwritten) {
+      log.plain(c.dim('On a real pull, files marked ') + c.yellow('overwrite') +
+        c.dim(` are backed up to ~/.agent-sync/backups/ first.`));
+    }
     return;
   }
 

@@ -15,6 +15,7 @@ import {
 } from '../fsutil.js';
 import { ensureGitAvailable, git, ensureIdentity } from '../git.js';
 import { ensureRepoReady } from '../repo.js';
+import { renderTree } from '../tree.js';
 
 const META_FILE = '.agent-sync-meta.json';
 
@@ -82,9 +83,18 @@ export async function push(opts = {}) {
 
   if (opts.dryRun) {
     log.plain('');
-    log.info(c.dim('Dry run — no changes pushed. Files that would be synced:'));
+    log.plain(c.dim('Dry run — no changes pushed. Files that would be synced:'));
+    log.plain('');
     for (const agent of agents) {
-      for (const f of collected[agent].files) log.plain(`  ${agent}/${f.rel}`);
+      const files = collected[agent].files;
+      if (!files.length) {
+        log.plain(`${c.cyan(agent)} ${c.dim('(nothing to sync)')}`);
+        log.plain('');
+        continue;
+      }
+      log.plain(`${c.cyan(agent)} ${c.dim(`(${files.length} file(s))`)}`);
+      for (const line of renderTree(files.map((f) => ({ path: f.rel })))) log.plain(line);
+      log.plain('');
     }
     return;
   }
