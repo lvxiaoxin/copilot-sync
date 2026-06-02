@@ -37,7 +37,7 @@ const GITATTRIBUTES = `# Managed by agent-sync — keep line endings stable acro
 
 const README = `# agent-sync store
 
-This repository is managed by [agent-sync](https://www.npmjs.com/package/agent-sync-cli).
+This repository is managed by [agent-sync](https://www.npmjs.com/package/ai-agent-sync).
 It holds shareable AI agent artifacts (skills, MCP configs, agents, prompts, settings)
 for Copilot, Claude, and Codex.
 

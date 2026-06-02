@@ -19,7 +19,7 @@ scanner that blocks any push containing token‑shaped values.
 ## Install
 
 ```bash
-npm install -g agent-sync-cli
+npm install -g ai-agent-sync
 ```
 
 Requires Node.js ≥ 18.17 and `git` on your `PATH`. Authentication uses your
