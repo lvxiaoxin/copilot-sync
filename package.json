@@ -1,5 +1,5 @@
 {
-  "name": "ai-agent-sync",
+  "name": "@lvxiaoxin/agent-sync",
   "version": "0.1.0",
   "description": "Cross-platform CLI to sync AI agent config artifacts (Copilot, Claude, Codex) across devboxes via a GitHub repo.",
   "type": "module",
@@ -39,6 +39,9 @@
     "cross-platform"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "commander": "^12.1.0"
   }
