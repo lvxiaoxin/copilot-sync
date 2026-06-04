@@ -1,9 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { Command } from 'commander';
 import { log, UserError } from './log.js';
 import { onboard } from './commands/onboard.js';
 import { push } from './commands/push.js';
 import { pull } from './commands/pull.js';
 import { status } from './commands/status.js';
+
+const pkg = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')
+);
 
 async function guard(fn) {
   try {
@@ -25,7 +32,7 @@ export async function run(argv) {
     .description(
       'Sync AI agent config artifacts (Copilot, Claude, Codex) across machines via a GitHub repo.'
     )
-    .version('0.1.0');
+    .version(pkg.version);
 
   program
     .command('onboard')
