@@ -207,13 +207,19 @@ On a real pull, files marked overwrite are backed up to ~/.agent-sync/backups/ f
 > Only sync it to a **private** repository. This is opt-in (you confirm once) and never
 > runs as part of `push`/`pull`.
 
+> [!NOTE]
+> **Copilot CLI only for now.** Session-history sync currently supports the
+> **GitHub Copilot CLI** (`~/.copilot/session-state/`). The `--agent` flag is reserved so
+> Claude Code and Codex can be added later — today only `--agent copilot` (the default)
+> works; `--agent claude`/`--agent codex` fail with a clear "not supported yet" message.
+
 Carry your Copilot CLI sessions (plans, checkpoints, transcripts, artifacts) between
-machines so you can pick work back up on another devbox. *First iteration: Copilot CLI
-only.*
+machines so you can pick work back up on another devbox.
 
 ```console
 $ agent-sync history list                 # local vs remote sessions and their state
 $ agent-sync history push                 # archive this machine's sessions (one-time confirm)
+$ agent-sync history push --since 7d       # only sessions modified in the last 7 days
 $ agent-sync history pull --session 1a2b   # restore a session by id prefix on another machine
 ```
 
@@ -225,7 +231,9 @@ $ agent-sync history pull --session 1a2b   # restore a session by id prefix on a
 
 | Flag | Applies to | Effect |
 | --- | --- | --- |
+| `--agent <name>` | push / pull / list | Which agent's history to sync. **Default `copilot`** — the only one supported today. |
 | `--session <id>` | push / pull | Limit to one session (full id or a unique prefix). |
+| `--since <window>` | push / list | Only sessions modified within a window: `7d`, `2w`, `1m` (= 30 days), `1y`, or a bare number of days. Push defaults to **all** sessions. |
 | `--dry-run` | push / pull | Preview the per-session file tree — writes/pushes nothing. |
 | `--yes` | push | Skip the one-time privacy confirmation. |
 | `--force` | push / pull | Include / overwrite sessions that look **active** (recently modified). |
@@ -373,6 +381,15 @@ A private repo is strongly recommended. Even though agent-sync filters credentia
 secret-scans every push, your skills, prompts, and MCP/agent settings are personal
 configuration — a private repo keeps them off the public internet and adds a second line of
 defense if something slips through the allow-list.
+
+**Are agent-sync's own backups pushed?**
+No. `pull` writes safety backups to `~/.agent-sync/backups/`, and the working clone lives in
+`~/.agent-sync/repo/` — both outside the directories agent-sync reads from. A `history push`
+only walks `~/.copilot/session-state/`, so backups never get re-uploaded.
+
+**Which agents can I sync session history for?**
+Copilot CLI only, for now. `history` defaults to `--agent copilot`; Claude Code and Codex
+are reserved on the `--agent` flag and reported as "not supported yet" until implemented.
 
 ## License
 

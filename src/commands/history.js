@@ -18,7 +18,6 @@ import { renderTree } from '../tree.js';
 import { createPrompter } from '../prompt.js';
 import {
   HISTORY_AGENT,
-  SESSIONS_SUBDIR,
   HISTORY_DENY,
   agentBase,
   sessionsRoot,
@@ -26,6 +25,8 @@ import {
   listLocalSessions,
   listRemoteSessionIds,
   resolveSelector,
+  resolveAgent,
+  parseSince,
   collectSession,
   readHistoryMeta,
   writeHistoryMeta,
@@ -34,8 +35,8 @@ import {
   WARN_TOTAL,
 } from '../history.js';
 
-function historyRepoDir(repo) {
-  return path.join(repo, 'history', HISTORY_AGENT);
+function historyRepoDir(repo, agent = HISTORY_AGENT) {
+  return path.join(repo, 'history', agent);
 }
 
 function shortId(id) {
@@ -65,12 +66,19 @@ function archiveNote() {
 export async function historyPush(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
+  const agent = resolveAgent(opts.agent);
+  const since = opts.since != null ? parseSince(opts.since) : null;
 
-  log.plain(c.bold('agent-sync history push') + (opts.dryRun ? c.dim('  (dry run)') : ''));
+  log.plain(
+    c.bold('agent-sync history push') +
+      c.dim(`  agent: ${agent.name}`) +
+      (since ? c.dim(`  since: ${opts.since}`) : '') +
+      (opts.dryRun ? c.dim('  (dry run)') : '')
+  );
 
-  const all = listLocalSessions();
+  const all = listLocalSessions(agent.name);
   if (!all.length) {
-    log.warn(`No Copilot sessions found at ${c.dim(sessionsRoot())}.`);
+    log.warn(`No ${agent.label} sessions found at ${c.dim(sessionsRoot(agent.name))}.`);
     return;
   }
 
@@ -80,7 +88,14 @@ export async function historyPush(opts = {}) {
   const activeSkipped = opts.force ? [] : selected.filter((s) => s.active);
   if (!opts.force) selected = selected.filter((s) => !s.active);
 
-  const collected = selected.map((s) => collectSession(s));
+  // Narrow to recently-modified sessions when --since is given.
+  let agedOut = [];
+  if (since != null) {
+    agedOut = selected.filter((s) => s.mtimeMs < since);
+    selected = selected.filter((s) => s.mtimeMs >= since);
+  }
+
+  const collected = selected.map((s) => collectSession(s, agent.name));
   const allFiles = collected.flatMap((x) => x.files);
 
   privacyReminder();
@@ -100,10 +115,22 @@ export async function historyPush(opts = {}) {
       `${activeSkipped.length} active session(s) skipped (recently modified). Use ${c.bold('--force')} to include.`
     );
   }
+  if (agedOut.length) {
+    log.warn(
+      `${agedOut.length} session(s) older than ${c.bold('--since ' + opts.since)} skipped.`
+    );
+  }
 
   if (!allFiles.length) {
     log.plain('');
-    log.warn('Nothing to push (no eligible sessions).');
+    // Be specific when an explicit --session was filtered out by --since.
+    if (opts.session && since != null && agedOut.length) {
+      log.warn(
+        `Session "${opts.session}" matched but is older than --since ${opts.since}; nothing pushed.`
+      );
+    } else {
+      log.warn('Nothing to push (no eligible sessions).');
+    }
     return;
   }
 
@@ -130,7 +157,7 @@ export async function historyPush(opts = {}) {
     log.plain('');
     for (const x of collected) {
       log.plain(`${c.cyan(x.id)} ${c.dim(`(${x.files.length} file(s))`)}`);
-      const prefix = `${SESSIONS_SUBDIR}/${x.id}/`;
+      const prefix = `${agent.sessionsSubdir}/${x.id}/`;
       const entries = x.files.map((f) => ({ path: f.rel.slice(prefix.length) }));
       for (const line of renderTree(entries)) log.plain(line);
       log.plain('');
@@ -160,7 +187,7 @@ export async function historyPush(opts = {}) {
   // Additive mirror: copy local sessions into the repo without deleting remote
   // sessions/files created on other machines.
   const dir = await ensureRepoReady(cfg, { update: true });
-  const repoHistory = historyRepoDir(dir);
+  const repoHistory = historyRepoDir(dir, agent.name);
   ensureDir(repoHistory);
   const meta = readHistoryMeta(repoHistory);
 
@@ -207,9 +234,9 @@ export async function historyPush(opts = {}) {
   // Additive: stage additions/modifications under the history tree only, and
   // never stage deletions, so sessions/files from other machines are preserved
   // even if the local clone is dirty.
-  await git(['add', '--ignore-removal', '--', `history/${HISTORY_AGENT}`], { cwd: dir });
+  await git(['add', '--ignore-removal', '--', `history/${agent.name}`], { cwd: dir });
   const status = (
-    await git(['status', '--porcelain', '--', `history/${HISTORY_AGENT}`], { cwd: dir })
+    await git(['status', '--porcelain', '--', `history/${agent.name}`], { cwd: dir })
   ).trim();
   if (!status) {
     log.ok('Already up to date — nothing to push.');
@@ -237,11 +264,16 @@ export async function historyPush(opts = {}) {
 export async function historyPull(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
+  const agent = resolveAgent(opts.agent);
 
-  log.plain(c.bold('agent-sync history pull') + (opts.dryRun ? c.dim('  (dry run)') : ''));
+  log.plain(
+    c.bold('agent-sync history pull') +
+      c.dim(`  agent: ${agent.name}`) +
+      (opts.dryRun ? c.dim('  (dry run)') : '')
+  );
 
   const dir = await ensureRepoReady(cfg, { update: true });
-  const repoHistory = historyRepoDir(dir);
+  const repoHistory = historyRepoDir(dir, agent.name);
   const remoteIds = listRemoteSessionIds(repoHistory);
   if (!remoteIds.length) {
     log.warn('No session history in the remote yet. Run `agent-sync history push` elsewhere first.');
@@ -253,9 +285,11 @@ export async function historyPull(opts = {}) {
     remoteIds.map((id) => ({ id }))
   );
   const meta = readHistoryMeta(repoHistory);
-  const base = agentBase();
-  const localActive = new Set(listLocalSessions().filter((s) => s.active).map((s) => s.id));
-  const backupRun = path.join(backupsDir(), tsStamp(), 'history', HISTORY_AGENT);
+  const base = agentBase(agent.name);
+  const localActive = new Set(
+    listLocalSessions(agent.name).filter((s) => s.active).map((s) => s.id)
+  );
+  const backupRun = path.join(backupsDir(), tsStamp(), 'history', agent.name);
 
   let wrote = 0;
   let overwritten = 0;
@@ -267,14 +301,14 @@ export async function historyPull(opts = {}) {
 
   for (const sel of selected) {
     const sessActive = localActive.has(sel.id) && !opts.force;
-    const sessRepo = path.join(repoHistory, SESSIONS_SUBDIR, sel.id);
+    const sessRepo = path.join(repoHistory, agent.sessionsSubdir, sel.id);
     const dryEntries = [];
     let applied = 0;
     let deferred = 0;
 
     for (const node of walk(sessRepo, '', HISTORY_DENY)) {
       if (node.type !== 'file') continue;
-      const rel = `${SESSIONS_SUBDIR}/${sel.id}/${node.rel}`;
+      const rel = `${agent.sessionsSubdir}/${sel.id}/${node.rel}`;
       const src = path.join(sessRepo, ...node.rel.split('/'));
       const dest = path.join(base, ...rel.split('/'));
       try {
@@ -400,20 +434,30 @@ export async function historyPull(opts = {}) {
 
 // ---- history list ---------------------------------------------------------
 
-export async function historyList() {
+export async function historyList(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
+  const agent = resolveAgent(opts.agent);
+  const since = opts.since != null ? parseSince(opts.since) : null;
 
   const dir = await ensureRepoReady(cfg, { update: true });
-  const repoHistory = historyRepoDir(dir);
-  const local = listLocalSessions();
+  const repoHistory = historyRepoDir(dir, agent.name);
+  let local = listLocalSessions(agent.name);
+  if (since != null) local = local.filter((s) => s.mtimeMs >= since);
   const localById = new Map(local.map((s) => [s.id, s]));
   const remoteIds = listRemoteSessionIds(repoHistory);
   const remoteSet = new Set(remoteIds);
 
-  log.plain(c.bold('agent-sync history'));
-  log.info(`Local sessions:  ${local.length}  ${c.dim(sessionsRoot())}`);
+  log.plain(c.bold('agent-sync history') + c.dim(`  agent: ${agent.name}`));
+  log.info(
+    `Local sessions:  ${local.length}` +
+      (since != null ? c.dim(` (within --since ${opts.since})`) : '') +
+      `  ${c.dim(sessionsRoot(agent.name))}`
+  );
   log.info(`Remote sessions: ${remoteIds.length}`);
+  if (since != null) {
+    log.info(c.dim('--since narrows local sessions only; remote timestamps are unreliable.'));
+  }
   log.plain('');
 
   const ids = new Set([...localById.keys(), ...remoteIds]);

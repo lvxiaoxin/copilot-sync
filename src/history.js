@@ -13,11 +13,93 @@ import {
 } from './fsutil.js';
 import { UserError } from './log.js';
 
-// Session-history sync currently targets the GitHub Copilot CLI only. Each
-// session lives in its own self-contained folder under ~/.copilot/session-state/<uuid>/.
-export const HISTORY_AGENT = 'copilot';
-export const SESSIONS_SUBDIR = 'session-state';
+// Session-history sync currently targets the GitHub Copilot CLI only.
+//
+// Each agent stores sessions differently, so support is described per-agent
+// rather than hard-coded. Adding Claude/Codex later means flipping `supported`
+// to true and confirming the on-disk layout — the command surface, repo layout
+// (history/<agent>/...), and selectors already flow through these descriptors.
+export const HISTORY_AGENTS = {
+  copilot: {
+    name: 'copilot',
+    label: 'GitHub Copilot CLI',
+    base: DEFAULT_MANIFEST.copilot.base, // ~/.copilot
+    sessionsSubdir: 'session-state', // ~/.copilot/session-state/<uuid>/
+    supported: true,
+  },
+  // Planned — layouts noted for reference; not enabled yet.
+  claude: {
+    name: 'claude',
+    label: 'Claude Code',
+    base: DEFAULT_MANIFEST.claude.base, // ~/.claude
+    sessionsSubdir: 'projects',
+    supported: false,
+  },
+  codex: {
+    name: 'codex',
+    label: 'Codex CLI',
+    base: DEFAULT_MANIFEST.codex.base, // ~/.codex
+    sessionsSubdir: 'sessions',
+    supported: false,
+  },
+};
+
+export const DEFAULT_HISTORY_AGENT = 'copilot';
+
+// Back-compat: the default agent's identifiers, used where a single agent is
+// assumed. New code should prefer resolveAgent()/the spec fields.
+export const HISTORY_AGENT = DEFAULT_HISTORY_AGENT;
+export const SESSIONS_SUBDIR = HISTORY_AGENTS[DEFAULT_HISTORY_AGENT].sessionsSubdir;
 export const META_FILE = '.agent-sync-meta.json';
+
+// Validate a --agent value and return its descriptor. Defaults to Copilot.
+// Known-but-unsupported agents get a friendly "not yet" message so the
+// Copilot-only scope is explicit; unknown names list what's available.
+export function resolveAgent(name) {
+  const key = String(name || DEFAULT_HISTORY_AGENT).trim().toLowerCase();
+  const spec = HISTORY_AGENTS[key];
+  if (!spec) {
+    const supported = Object.values(HISTORY_AGENTS)
+      .filter((s) => s.supported)
+      .map((s) => s.name)
+      .join(', ');
+    throw new UserError(`Unknown agent "${name}". History sync supports: ${supported}.`);
+  }
+  if (!spec.supported) {
+    throw new UserError(
+      `Session-history sync for ${spec.label} isn't supported yet — Copilot only for now.`
+    );
+  }
+  return spec;
+}
+
+function specOf(agent) {
+  if (agent && typeof agent === 'object' && agent.name) return agent;
+  return HISTORY_AGENTS[agent || DEFAULT_HISTORY_AGENT] || HISTORY_AGENTS[DEFAULT_HISTORY_AGENT];
+}
+
+// Parse a --since window (e.g. "7d", "2w", "1m"/"1mo", "30") into an absolute
+// cutoff in epoch-ms. Bare number = days; m/mo/month = 30 days; w = 7 days;
+// y = 365 days. Case-insensitive. Rejects 0, decimals, and absurd windows.
+export function parseSince(input) {
+  const s = String(input).trim().toLowerCase();
+  const m = s.match(/^(\d+)\s*(d|w|mo|m|y|day|days|week|weeks|month|months|year|years)?$/);
+  if (!m) {
+    throw new UserError(
+      `Unsupported --since value "${input}". Use days/weeks/months/years, e.g. 7d, 2w, 1m, or a number of days.`
+    );
+  }
+  const n = parseInt(m[1], 10);
+  if (n <= 0) throw new UserError('--since must be a positive window, e.g. 7d, 2w, 1m.');
+  if (n > 36500) throw new UserError('--since window is unreasonably large (max ~100 years).');
+  const unit = m[2] || 'd';
+  const DAY = 24 * 60 * 60 * 1000;
+  let mult = DAY;
+  if (unit.startsWith('w')) mult = 7 * DAY;
+  else if (unit.startsWith('y')) mult = 365 * DAY;
+  else if (unit === 'm' || unit.startsWith('mo')) mult = 30 * DAY; // month ≈ 30 days
+  return Date.now() - n * mult;
+}
 
 // Patterns dropped during history collection: live SQLite sidecars, temp files,
 // VCS metadata, and bulky build dirs that may appear inside session artifacts.
@@ -65,12 +147,13 @@ export const HARD_FILE_LIMIT = 95 * 1024 * 1024;
 export const WARN_FILE_LIMIT = 50 * 1024 * 1024;
 export const WARN_TOTAL = 100 * 1024 * 1024;
 
-export function agentBase() {
-  return expandHome(DEFAULT_MANIFEST[HISTORY_AGENT].base);
+export function agentBase(agent = DEFAULT_HISTORY_AGENT) {
+  return expandHome(specOf(agent).base);
 }
 
-export function sessionsRoot() {
-  return path.join(agentBase(), SESSIONS_SUBDIR);
+export function sessionsRoot(agent = DEFAULT_HISTORY_AGENT) {
+  const spec = specOf(agent);
+  return path.join(expandHome(spec.base), spec.sessionsSubdir);
 }
 
 export function fmtSize(n) {
@@ -107,9 +190,9 @@ function statSession(dir, id) {
   return { id, dir, mtimeMs, sizeBytes, fileCount, active };
 }
 
-// Enumerate local Copilot sessions, newest first.
-export function listLocalSessions() {
-  const root = sessionsRoot();
+// Enumerate local sessions for an agent, newest first.
+export function listLocalSessions(agent = DEFAULT_HISTORY_AGENT) {
+  const root = sessionsRoot(agent);
   if (!exists(root)) return [];
   let names;
   try {
