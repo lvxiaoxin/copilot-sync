@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureDir } from './fsutil.js';
+import { ensureDir, exists } from './fsutil.js';
 import { UserError } from './log.js';
 
 // Root for all agent-sync state. Overridable for testing via AGENT_SYNC_HOME.
@@ -43,4 +43,34 @@ export function requireConfig() {
 export function saveConfig(cfg) {
   ensureDir(appHome());
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n');
+}
+
+// Keep only the most recent `keep` timestamped backup runs under backupsDir().
+// Shared by both `pull` and `history pull`.
+export function pruneBackups(keep = 20) {
+  const root = backupsDir();
+  if (!exists(root)) return;
+  let entries;
+  try {
+    entries = fs
+      .readdirSync(root)
+      .filter((n) => {
+        try {
+          return fs.statSync(path.join(root, n)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+  } catch {
+    return;
+  }
+  while (entries.length > keep) {
+    const old = entries.shift();
+    try {
+      fs.rmSync(path.join(root, old), { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
 }

@@ -36,6 +36,8 @@ and lays them back down in the right places on any OS.
 - [Quick start](#quick-start)
 - [In action](#in-action)
 - [Commands](#commands)
+- [Session history](#session-history)
+- [Resume sessions across devboxes](#resume-sessions-across-devboxes)
 - [What gets synced](#what-gets-synced)
 - [Safety model](#safety-model)
 - [Configuration](#configuration)
@@ -198,6 +200,75 @@ On a real pull, files marked overwrite are backed up to ~/.agent-sync/backups/ f
 | `--dry-run` | Print the per-agent file tree of what would change — writes nothing. |
 | `--unsafe-allow` | Bypass the deny-list / secret scan. Discouraged; use only if you know what you're doing. |
 
+## Session history
+
+> [!IMPORTANT]
+> Session history can contain **secrets, file contents, and command output** verbatim.
+> Only sync it to a **private** repository. This is opt-in (you confirm once) and never
+> runs as part of `push`/`pull`.
+
+Carry your Copilot CLI sessions (plans, checkpoints, transcripts, artifacts) between
+machines so you can pick work back up on another devbox. *First iteration: Copilot CLI
+only.*
+
+```console
+$ agent-sync history list                 # local vs remote sessions and their state
+$ agent-sync history push                 # archive this machine's sessions (one-time confirm)
+$ agent-sync history pull --session 1a2b   # restore a session by id prefix on another machine
+```
+
+| Command | Description |
+| --- | --- |
+| `agent-sync history list` | Show every local and remote session with size, last-modified, and `synced` / `local-only` / `remote-only` state. |
+| `agent-sync history push` | Archive this machine's sessions to `history/copilot/` in the repo. **Additive** — never deletes remote sessions, so sessions union across machines. |
+| `agent-sync history pull` | Restore sessions into `~/.copilot/session-state/`. Overwrites are backed up first; local-only files are never touched. |
+
+| Flag | Applies to | Effect |
+| --- | --- | --- |
+| `--session <id>` | push / pull | Limit to one session (full id or a unique prefix). |
+| `--dry-run` | push / pull | Preview the per-session file tree — writes/pushes nothing. |
+| `--yes` | push | Skip the one-time privacy confirmation. |
+| `--force` | push / pull | Include / overwrite sessions that look **active** (recently modified). |
+| `--force-large` | push | Allow files approaching GitHub's 100MB limit. |
+
+How it stays safe:
+
+- **Active sessions are skipped** by default (recent mtime or a live SQLite `-wal`/`-shm`
+  sidecar), so an in-flight session can't be captured half-written or clobbered — including
+  the very session running the command.
+- **Credential files are excluded** (`.env`, `id_rsa`, `*.pem`, `.npmrc`, …) and symlinks
+  are skipped, even though history bypasses the normal config allow-list.
+- **Live database sidecars** (`*-wal`, `*-shm`) and temp/`node_modules`/`.git` paths are
+  dropped to avoid torn or bulky copies.
+- **Backups before overwrite** — replaced local files land in
+  `~/.agent-sync/backups/<timestamp>/history/copilot/` exactly like a config `pull`.
+
+> [!NOTE]
+> This **archives and restores the on-disk session folder**. Whether the Copilot CLI then
+> *lists or resumes* a restored session also depends on its own internal index, which is
+> deliberately not synced. Treat it as reliable archive/restore, not a guaranteed "resume".
+
+## Resume sessions across devboxes
+
+`agent-sync history` moves the session **files** between machines. To then *browse and
+resume* a restored session, pair it with a session launcher — a small TUI that lists your
+sessions and reopens the right one in the agent CLI:
+
+| Tool | For | Install | Launch |
+| --- | --- | --- | --- |
+| [**copilot-starter**](https://github.com/lvxiaoxin/copilot-starter) | GitHub Copilot CLI | `npm i -g copilot-starter` | `copilot-starter` |
+| [**claude-starter**](https://github.com/Bojun-Vvibe/claude-starter) | Claude Code | `npm i -g claude-starter` | `claude-starter` |
+| [**codex-starter**](https://github.com/Bojun-Vvibe/codex-starter) | Codex CLI | `npm i -g codex-starter` | `codex-starter` |
+
+Each gives you fuzzy search, project grouping, live preview, and one-key resume instead of a
+wall of UUIDs — so a session that started on one devbox can be found and continued on another.
+
+> [!TIP]
+> **The cross-devbox workflow:** `agent-sync history push` on the source machine →
+> `agent-sync history pull` on the target machine → open the matching **`*-starter`** there
+> and resume. `agent-sync` carries the history; the starters give you a great way to pick a
+> session back up.
+
 ## What gets synced
 
 Relative to each agent's base directory:
@@ -248,7 +319,7 @@ The hard deny-list still applies to any custom includes. Where things live:
 | --- | --- |
 | `~/.agent-sync/config.json` | Your remote, branch, agents, and optional manifest. |
 | `~/.agent-sync/repo` | Local working clone of the store. |
-| `~/.agent-sync/backups/<timestamp>/` | Files replaced by the last 20 `pull` runs. |
+| `~/.agent-sync/backups/<timestamp>/` | Files replaced by the last 20 `pull` / `history pull` runs. |
 
 > Override the base directory with the `AGENT_SYNC_HOME` environment variable (handy for testing).
 
@@ -273,8 +344,8 @@ The hard deny-list still applies to any custom includes. Where things live:
 Today agent-sync covers **shareable configuration**. Planned next, opt-in and behind the
 same safety model:
 
-- [ ] **Session history sync** — carry recent conversation/session transcripts between
-      machines (opt-in; redaction + secret-scan applied, never on by default).
+- [x] **Session history sync** — carry sessions between machines (Copilot CLI; opt-in,
+      private-repo only, active-session & credential guards). _Shipped._
 - [ ] **Memory sync** — agent long-term memories / knowledge stores.
 - [ ] **Selective profiles** — named subsets (e.g. `work` vs `personal`) you can push/pull
       independently.

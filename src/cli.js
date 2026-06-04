@@ -7,6 +7,7 @@ import { onboard } from './commands/onboard.js';
 import { push } from './commands/push.js';
 import { pull } from './commands/pull.js';
 import { status } from './commands/status.js';
+import { historyPush, historyPull, historyList } from './commands/history.js';
 
 const pkg = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')
@@ -57,6 +58,33 @@ export async function run(argv) {
     .command('status')
     .description('Show configuration and what would sync from this machine.')
     .action(() => guard(status));
+
+  const history = program
+    .command('history')
+    .description('Sync Copilot CLI session history (archive/restore sessions across machines).');
+
+  history
+    .command('push')
+    .description('Archive this machine\'s Copilot sessions to the remote (additive).')
+    .option('--session <id>', 'Only this session (full id or unique prefix).')
+    .option('--dry-run', 'Show what would be pushed without changing anything.')
+    .option('--yes', 'Skip the one-time privacy confirmation.')
+    .option('--force', 'Include sessions that look active (recently modified).')
+    .option('--force-large', 'Allow files near GitHub\'s 100MB limit.')
+    .action((opts) => guard(() => historyPush(opts)));
+
+  history
+    .command('pull')
+    .description('Restore Copilot sessions from the remote into this machine.')
+    .option('--session <id>', 'Only this session (full id or unique prefix).')
+    .option('--dry-run', 'Show what would change locally without writing anything.')
+    .option('--force', 'Overwrite even if the local session looks active.')
+    .action((opts) => guard(() => historyPull(opts)));
+
+  history
+    .command('list')
+    .description('List local and remote sessions and their sync state.')
+    .action(() => guard(historyList));
 
   await program.parseAsync(argv);
 }

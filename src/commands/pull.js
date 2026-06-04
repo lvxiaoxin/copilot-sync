@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { log, c } from '../log.js';
-import { requireConfig, backupsDir } from '../config.js';
+import { requireConfig, backupsDir, pruneBackups } from '../config.js';
 import { resolveManifest, HARD_DENY } from '../manifest.js';
 import {
   expandHome,
@@ -18,29 +18,6 @@ import { ensureRepoReady } from '../repo.js';
 import { renderTree } from '../tree.js';
 
 const META_FILE = '.agent-sync-meta.json';
-const KEEP_BACKUPS = 20;
-
-function pruneBackups() {
-  const root = backupsDir();
-  if (!exists(root)) return;
-  let entries;
-  try {
-    entries = fs
-      .readdirSync(root)
-      .filter((n) => fs.statSync(path.join(root, n)).isDirectory())
-      .sort();
-  } catch {
-    return;
-  }
-  while (entries.length > KEEP_BACKUPS) {
-    const old = entries.shift();
-    try {
-      fs.rmSync(path.join(root, old), { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
-  }
-}
 
 export async function pull(opts = {}) {
   const cfg = requireConfig();
