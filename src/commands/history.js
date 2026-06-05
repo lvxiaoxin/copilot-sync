@@ -4,7 +4,6 @@ import path from 'node:path';
 import { log, c, UserError } from '../log.js';
 import { requireConfig, saveConfig, backupsDir, pruneBackups } from '../config.js';
 import {
-  expandHome,
   exists,
   walk,
   assertInside,
@@ -25,6 +24,7 @@ import {
   fmtSize,
   listLocalSessions,
   listRemoteSessionIds,
+  listRemoteSessions,
   resolveSelector,
   resolveAgent,
   parseSince,
@@ -59,13 +59,51 @@ function privacyReminder() {
   log.warn('Only sync to a ' + c.bold('private') + ' repository.');
 }
 
-function archiveNote() {
+function archiveNote(agent) {
+  if (!agent.sharedStore) {
+    log.info(c.dim(`Note: this archives/restores ${agent.label} session files.`));
+    return;
+  }
   log.info(
     c.dim(
       'Note: this archives/restores the session folder and its shared session-store metadata ' +
         'so Copilot session browsers can see restored sessions.'
     )
   );
+}
+
+function displayPathForSession(agent, sessionId, rel) {
+  const sessionPrefix = `${agent.sessionsSubdir}/${sessionId}/`;
+  if (rel.startsWith(sessionPrefix)) return rel.slice(sessionPrefix.length);
+  const rootPrefix = `${agent.sessionsSubdir}/`;
+  if (rel.startsWith(rootPrefix)) return rel.slice(rootPrefix.length);
+  return rel;
+}
+
+function remoteFilesForSession(repoHistory, agent, session) {
+  if (agent.layout === 'jsonl-projects') {
+    const src = path.join(repoHistory, ...session.rel.split('/'));
+    return [
+      {
+        rel: session.rel,
+        src,
+        treePath: displayPathForSession(agent, session.id, session.rel),
+      },
+    ];
+  }
+
+  const sessRepo = path.join(repoHistory, ...session.rel.split('/'));
+  const files = [];
+  for (const node of walk(sessRepo, '', HISTORY_DENY)) {
+    if (node.type !== 'file') continue;
+    const rel = `${session.rel}/${node.rel}`;
+    files.push({
+      rel,
+      src: path.join(sessRepo, ...node.rel.split('/')),
+      treePath: node.rel,
+    });
+  }
+  return files;
 }
 
 // ---- history push ---------------------------------------------------------
@@ -164,8 +202,9 @@ export async function historyPush(opts = {}) {
     log.plain('');
     for (const x of collected) {
       log.plain(`${c.cyan(x.id)} ${c.dim(`(${x.files.length} file(s))`)}`);
-      const prefix = `${agent.sessionsSubdir}/${x.id}/`;
-      const entries = x.files.map((f) => ({ path: f.rel.slice(prefix.length) }));
+      const entries = x.files.map((f) => ({
+        path: displayPathForSession(agent, x.id, f.rel),
+      }));
       for (const line of renderTree(entries)) log.plain(line);
       log.plain('');
     }
@@ -197,7 +236,7 @@ export async function historyPush(opts = {}) {
   const repoHistory = historyRepoDir(dir, agent.name);
   ensureDir(repoHistory);
   const meta = readHistoryMeta(repoHistory);
-  const storePath = sharedStorePath(agent.name);
+  const storePath = agent.sharedStore ? sharedStorePath(agent.name) : null;
 
   let copied = 0;
   let indexed = 0;
@@ -227,10 +266,12 @@ export async function historyPush(opts = {}) {
       else delete meta.modes[key];
       copied++;
     }
-    const indexPayload = exportSessionIndex(storePath, x.id);
-    writeSessionIndexFile(repoHistory, indexPayload);
-    if (indexPayload.missing) missingIndex++;
-    else indexed++;
+    if (storePath) {
+      const indexPayload = exportSessionIndex(storePath, x.id);
+      writeSessionIndexFile(repoHistory, indexPayload);
+      if (indexPayload.missing) missingIndex++;
+      else indexed++;
+    }
   }
   writeHistoryMeta(repoHistory, meta);
 
@@ -296,19 +337,16 @@ export async function historyPull(opts = {}) {
 
   const dir = await ensureRepoReady(cfg, { update: true });
   const repoHistory = historyRepoDir(dir, agent.name);
-  const remoteIds = listRemoteSessionIds(repoHistory);
-  if (!remoteIds.length) {
+  const remoteSessions = listRemoteSessions(repoHistory, agent.name);
+  if (!remoteSessions.length) {
     log.warn('No session history in the remote yet. Run `agent-sync history push` elsewhere first.');
     return;
   }
 
-  const selected = resolveSelector(
-    opts.session,
-    remoteIds.map((id) => ({ id }))
-  );
+  const selected = resolveSelector(opts.session, remoteSessions);
   const meta = readHistoryMeta(repoHistory);
   const base = agentBase(agent.name);
-  const storePath = sharedStorePath(agent.name);
+  const storePath = agent.sharedStore ? sharedStorePath(agent.name) : null;
   const localActive = new Set(
     listLocalSessions(agent.name).filter((s) => s.active).map((s) => s.id)
   );
@@ -325,19 +363,19 @@ export async function historyPull(opts = {}) {
   log.plain('');
 
   for (const sel of selected) {
-    const indexPayload = readSessionIndexFile(repoHistory, sel.id);
-    if (indexPayload) indexPayloads.push(indexPayload);
-    else indexedMissing++;
+    if (storePath) {
+      const indexPayload = readSessionIndexFile(repoHistory, sel.id);
+      if (indexPayload) indexPayloads.push(indexPayload);
+      else indexedMissing++;
+    }
     const sessActive = localActive.has(sel.id) && !opts.force;
-    const sessRepo = path.join(repoHistory, agent.sessionsSubdir, sel.id);
     const dryEntries = [];
     let applied = 0;
     let deferred = 0;
 
-    for (const node of walk(sessRepo, '', HISTORY_DENY)) {
-      if (node.type !== 'file') continue;
-      const rel = `${agent.sessionsSubdir}/${sel.id}/${node.rel}`;
-      const src = path.join(sessRepo, ...node.rel.split('/'));
+    for (const item of remoteFilesForSession(repoHistory, agent, sel)) {
+      const rel = item.rel;
+      const src = item.src;
       const dest = path.join(base, ...rel.split('/'));
       try {
         assertInside(base, dest, 'dispatch dest');
@@ -375,7 +413,7 @@ export async function historyPull(opts = {}) {
       }
 
       if (opts.dryRun) {
-        dryEntries.push({ path: node.rel, tag: destExists ? 'overwrite' : 'new' });
+        dryEntries.push({ path: item.treePath, tag: destExists ? 'overwrite' : 'new' });
         if (destExists) overwritten++;
         else wrote++;
         applied++;
@@ -383,7 +421,7 @@ export async function historyPull(opts = {}) {
       }
 
       if (destExists) {
-        const bdest = path.join(backupRun, sel.id, ...node.rel.split('/'));
+        const bdest = path.join(backupRun, sel.id, ...item.treePath.split('/'));
         try {
           ensureDir(path.dirname(bdest));
           fs.copyFileSync(dest, bdest);
@@ -481,7 +519,7 @@ export async function historyPull(opts = {}) {
       `${missingIndex + indexedMissing} session(s) were restored without shared session-store metadata.`
     );
   }
-  archiveNote();
+  archiveNote(agent);
 }
 
 // ---- history list ---------------------------------------------------------
@@ -497,7 +535,7 @@ export async function historyList(opts = {}) {
   let local = listLocalSessions(agent.name);
   if (since != null) local = local.filter((s) => s.mtimeMs >= since);
   const localById = new Map(local.map((s) => [s.id, s]));
-  const remoteIds = listRemoteSessionIds(repoHistory);
+  const remoteIds = listRemoteSessionIds(repoHistory, agent.name);
   const remoteSet = new Set(remoteIds);
 
   log.plain(c.bold('agent-sync history') + c.dim(`  agent: ${agent.name}`));

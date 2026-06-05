@@ -13,33 +13,33 @@ import {
 } from './fsutil.js';
 import { UserError } from './log.js';
 
-// Session-history sync currently targets the GitHub Copilot CLI only.
-//
 // Each agent stores sessions differently, so support is described per-agent
-// rather than hard-coded. Adding Claude/Codex later means flipping `supported`
-// to true and confirming the on-disk layout — the command surface, repo layout
-// (history/<agent>/...), and selectors already flow through these descriptors.
+// rather than hard-coded. The command surface and repo layout are shared:
+// history/<agent>/<sessionsSubdir>/...
 export const HISTORY_AGENTS = {
   copilot: {
     name: 'copilot',
     label: 'GitHub Copilot CLI',
     base: DEFAULT_MANIFEST.copilot.base, // ~/.copilot
+    layout: 'directory',
     sessionsSubdir: 'session-state', // ~/.copilot/session-state/<uuid>/
     sharedStore: 'session-store.db', // ~/.copilot/session-store.db
     supported: true,
   },
-  // Planned — layouts noted for reference; not enabled yet.
   claude: {
     name: 'claude',
     label: 'Claude Code',
     base: DEFAULT_MANIFEST.claude.base, // ~/.claude
-    sessionsSubdir: 'projects',
-    supported: false,
+    layout: 'jsonl-projects',
+    sessionsSubdir: 'projects', // ~/.claude/projects/<project>/<uuid>.jsonl
+    supported: true,
   },
+  // Planned — layout noted for reference; not enabled yet.
   codex: {
     name: 'codex',
     label: 'Codex CLI',
     base: DEFAULT_MANIFEST.codex.base, // ~/.codex
+    layout: 'directory',
     sessionsSubdir: 'sessions',
     supported: false,
   },
@@ -67,8 +67,12 @@ export function resolveAgent(name) {
     throw new UserError(`Unknown agent "${name}". History sync supports: ${supported}.`);
   }
   if (!spec.supported) {
+    const supported = Object.values(HISTORY_AGENTS)
+      .filter((s) => s.supported)
+      .map((s) => s.name)
+      .join(', ');
     throw new UserError(
-      `Session-history sync for ${spec.label} isn't supported yet — Copilot only for now.`
+      `Session-history sync for ${spec.label} isn't supported yet. Supported agents: ${supported}.`
     );
   }
   return spec;
@@ -159,6 +163,7 @@ export function sessionsRoot(agent = DEFAULT_HISTORY_AGENT) {
 
 export function sharedStorePath(agent = DEFAULT_HISTORY_AGENT) {
   const spec = specOf(agent);
+  if (!spec.sharedStore) return null;
   return path.join(expandHome(spec.base), spec.sharedStore);
 }
 
@@ -173,7 +178,7 @@ export function fmtSize(n) {
   return `${i === 0 || v >= 10 ? Math.round(v) : v.toFixed(1)}${u[i]}`;
 }
 
-function statSession(dir, id) {
+function statDirectorySession(dir, id, spec) {
   let mtimeMs = 0;
   let sizeBytes = 0;
   let fileCount = 0;
@@ -193,13 +198,75 @@ function statSession(dir, id) {
     if (/(-wal|-shm)$/.test(node.rel)) hasWal = true;
   }
   const active = hasWal || (mtimeMs > 0 && Date.now() - mtimeMs < ACTIVE_WINDOW_MS);
-  return { id, dir, mtimeMs, sizeBytes, fileCount, active };
+  return {
+    id,
+    kind: 'directory',
+    dir,
+    rel: `${spec.sessionsSubdir}/${id}`,
+    mtimeMs,
+    sizeBytes,
+    fileCount,
+    active,
+  };
+}
+
+function statFileSession(file, id, rel, projectDir) {
+  const st = fs.statSync(file);
+  return {
+    id,
+    kind: 'file',
+    file,
+    dir: path.dirname(file),
+    rel,
+    projectDir,
+    mtimeMs: st.mtimeMs,
+    sizeBytes: st.size,
+    fileCount: 1,
+    active: Date.now() - st.mtimeMs < ACTIVE_WINDOW_MS,
+  };
 }
 
 // Enumerate local sessions for an agent, newest first.
 export function listLocalSessions(agent = DEFAULT_HISTORY_AGENT) {
-  const root = sessionsRoot(agent);
+  const spec = specOf(agent);
+  const root = sessionsRoot(spec.name);
   if (!exists(root)) return [];
+  if (spec.layout === 'jsonl-projects') {
+    const sessions = [];
+    let projectDirs;
+    try {
+      projectDirs = fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.isSymbolicLink())
+        .map((d) => d.name);
+    } catch {
+      return [];
+    }
+    for (const projectDir of projectDirs) {
+      const projectPath = path.join(root, projectDir);
+      let files;
+      try {
+        files = fs
+          .readdirSync(projectPath, { withFileTypes: true })
+          .filter((d) => d.isFile() && !d.isSymbolicLink() && d.name.endsWith('.jsonl'))
+          .map((d) => d.name);
+      } catch {
+        continue;
+      }
+      for (const fileName of files) {
+        const file = path.join(projectPath, fileName);
+        const id = path.basename(fileName, '.jsonl');
+        const rel = `${spec.sessionsSubdir}/${projectDir}/${fileName}`;
+        try {
+          sessions.push(statFileSession(file, id, rel, projectDir));
+        } catch {
+          /* vanished while listing */
+        }
+      }
+    }
+    return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  }
+
   let names;
   try {
     names = fs
@@ -210,7 +277,7 @@ export function listLocalSessions(agent = DEFAULT_HISTORY_AGENT) {
     return [];
   }
   return names
-    .map((id) => statSession(path.join(root, id), id))
+    .map((id) => statDirectorySession(path.join(root, id), id, spec))
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
@@ -239,14 +306,32 @@ export function resolveSelector(selector, items) {
 // Collect the concrete files to sync for one local session.
 // Returns { id, active, files:[{rel,abs,mode,size}], symlinks, sensitive, denied }.
 // `rel` is posix and relative to the agent base (e.g. session-state/<id>/plan.md).
-export function collectSession(session) {
-  const base = agentBase();
-  const dir = session.dir;
-  const relPrefix = `${SESSIONS_SUBDIR}/${session.id}`;
+export function collectSession(session, agent = DEFAULT_HISTORY_AGENT) {
+  const spec = specOf(agent);
+  const base = agentBase(spec.name);
   const files = [];
   const symlinks = [];
   const sensitive = [];
   const denied = [];
+
+  if (spec.layout === 'jsonl-projects') {
+    const rel = session.rel;
+    if (matchesAny(path.basename(rel).toLowerCase(), SENSITIVE_DENY)) {
+      sensitive.push(rel);
+      return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
+    }
+    try {
+      assertInside(base, session.file, 'session path');
+      const st = fs.statSync(session.file);
+      files.push({ rel, abs: session.file, mode: st.mode, size: st.size });
+    } catch {
+      denied.push(rel);
+    }
+    return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
+  }
+
+  const dir = session.dir;
+  const relPrefix = session.rel || `${spec.sessionsSubdir}/${session.id}`;
 
   for (const node of walk(dir, '', HISTORY_DENY)) {
     const rel = `${relPrefix}/${node.rel}`;
@@ -284,18 +369,57 @@ export function collectSession(session) {
   return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
 }
 
-// List the session ids present in the remote clone's history tree.
-export function listRemoteSessionIds(historyRepo) {
-  const root = path.join(historyRepo, SESSIONS_SUBDIR);
+// List the sessions present in the remote clone's history tree.
+export function listRemoteSessions(historyRepo, agent = DEFAULT_HISTORY_AGENT) {
+  const spec = specOf(agent);
+  const root = path.join(historyRepo, spec.sessionsSubdir);
   if (!exists(root)) return [];
+  if (spec.layout === 'jsonl-projects') {
+    const sessions = [];
+    let projectDirs;
+    try {
+      projectDirs = fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.isSymbolicLink())
+        .map((d) => d.name);
+    } catch {
+      return [];
+    }
+    for (const projectDir of projectDirs) {
+      const projectPath = path.join(root, projectDir);
+      let files;
+      try {
+        files = fs
+          .readdirSync(projectPath, { withFileTypes: true })
+          .filter((d) => d.isFile() && !d.isSymbolicLink() && d.name.endsWith('.jsonl'))
+          .map((d) => d.name);
+      } catch {
+        continue;
+      }
+      for (const fileName of files) {
+        sessions.push({
+          id: path.basename(fileName, '.jsonl'),
+          rel: `${spec.sessionsSubdir}/${projectDir}/${fileName}`,
+          projectDir,
+        });
+      }
+    }
+    return sessions;
+  }
+
   try {
     return fs
       .readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+      .map((d) => ({ id: d.name, rel: `${spec.sessionsSubdir}/${d.name}` }));
   } catch {
     return [];
   }
+}
+
+// List the session ids present in the remote clone's history tree.
+export function listRemoteSessionIds(historyRepo, agent = DEFAULT_HISTORY_AGENT) {
+  return listRemoteSessions(historyRepo, agent).map((s) => s.id);
 }
 
 export function readHistoryMeta(historyRepo) {

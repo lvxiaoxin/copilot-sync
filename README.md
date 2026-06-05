@@ -212,18 +212,20 @@ On a real pull, files marked overwrite are backed up to ~/.agent-sync/backups/ f
 > runs as part of `push`/`pull`.
 
 > [!NOTE]
-> **Copilot CLI only for now.** Session-history sync currently supports the
-> **GitHub Copilot CLI** (`~/.copilot/session-state/`). The `--agent` flag is reserved so
-> Claude Code and Codex can be added later — today only `--agent copilot` (the default)
-> works; `--agent claude`/`--agent codex` fail with a clear "not supported yet" message.
+> Session-history sync currently supports **GitHub Copilot CLI** and **Claude Code**.
+> Use `--agent copilot` (default) for `~/.copilot/session-state/`, or `--agent claude`
+> for `~/.claude/projects/**/*.jsonl`. Codex is still reserved on the `--agent` flag and
+> reports "not supported yet" until implemented.
 
-Carry your Copilot CLI sessions (plans, checkpoints, transcripts, artifacts) between
-machines so you can pick work back up on another devbox.
+Carry your Copilot CLI and Claude Code sessions between machines so you can pick work
+back up on another devbox.
 
 ```console
 $ agent-sync history list                 # local vs remote sessions and their state
+$ agent-sync history list --agent claude  # list Claude Code sessions
 $ agent-sync history push                 # archive this machine's sessions (one-time confirm)
 $ agent-sync history push --since 7d       # only sessions modified in the last 7 days
+$ agent-sync history push --agent claude   # archive Claude Code JSONL sessions
 $ agent-sync history pull --session 1a2b   # restore a session by id prefix on another machine
 ```
 
@@ -275,12 +277,12 @@ Updated shared session-store metadata for 9 session(s).
 | Command | Description |
 | --- | --- |
 | `agent-sync history list` | Show every local and remote session with size, last-modified, and `synced` / `local-only` / `remote-only` state. |
-| `agent-sync history push` | Archive this machine's sessions to `history/copilot/` in the repo. **Additive** — never deletes remote sessions, so sessions union across machines. |
-| `agent-sync history pull` | Restore sessions into `~/.copilot/session-state/` and merge their shared `session-store.db` metadata. Overwrites are backed up first; local-only files are never touched. |
+| `agent-sync history push` | Archive this machine's sessions to `history/<agent>/` in the repo. **Additive** — never deletes remote sessions, so sessions union across machines. |
+| `agent-sync history pull` | Restore sessions into the agent's local history directory. Copilot also merges shared `session-store.db` metadata; Claude restores JSONL files under `~/.claude/projects/`. |
 
 | Flag | Applies to | Effect |
 | --- | --- | --- |
-| `--agent <name>` | push / pull / list | Which agent's history to sync. **Default `copilot`** — the only one supported today. |
+| `--agent <name>` | push / pull / list | Which agent's history to sync. **Default `copilot`**. Supported today: `copilot`, `claude`. |
 | `--session <id>` | push / pull | Limit to one session (full id or a unique prefix). |
 | `--since <window>` | push / list | Only sessions modified within a window: `7d`, `2w`, `1m` (= 30 days), `1y`, or a bare number of days. Push defaults to **all** sessions. |
 | `--dry-run` | push / pull | Preview the per-session file tree — writes/pushes nothing. |
@@ -298,19 +300,21 @@ How it stays safe:
 - **Live database sidecars** (`*-wal`, `*-shm`) and temp/`node_modules`/`.git` paths are
   dropped to avoid torn or bulky copies.
 - **Backups before overwrite** — replaced local files land in
-  `~/.agent-sync/backups/<timestamp>/history/copilot/` exactly like a config `pull`.
+  `~/.agent-sync/backups/<timestamp>/history/<agent>/` exactly like a config `pull`.
 
 > [!NOTE]
 > For **Copilot CLI**, history sync now carries both the on-disk session folder and the
 > matching rows from `~/.copilot/session-store.db`, so restored sessions show up in
 > tools like `copilot-starter` and Copilot's own session browsers on the target machine.
+> For **Claude Code**, sessions are already self-contained JSONL files under
+> `~/.claude/projects/`, so no extra shared database is needed.
 
 ## Resume sessions across devboxes
 
-`agent-sync history` moves the session files **and, for Copilot, the shared session-store
-metadata** between machines. To browse and resume a restored session comfortably, pair it
-with a session launcher — a small TUI that lists your sessions and reopens the right one
-in the agent CLI:
+`agent-sync history` moves session files between machines; for Copilot, it also carries
+the shared session-store metadata. To browse and resume a restored session comfortably,
+pair it with a session launcher — a small TUI that lists your sessions and reopens the
+right one in the agent CLI:
 
 | Tool | For | Install | Launch |
 | --- | --- | --- | --- |
@@ -402,7 +406,7 @@ The hard deny-list still applies to any custom includes. Where things live:
 Today agent-sync covers **shareable configuration**. Planned next, opt-in and behind the
 same safety model:
 
-- [x] **Session history sync** — carry sessions between machines (Copilot CLI; opt-in,
+- [x] **Session history sync** — carry sessions between machines (Copilot CLI and Claude Code; opt-in,
       private-repo only, active-session & credential guards). _Shipped._
 - [ ] **Memory sync** — agent long-term memories / knowledge stores.
 - [ ] **Selective profiles** — named subsets (e.g. `work` vs `personal`) you can push/pull
@@ -435,11 +439,12 @@ defense if something slips through the allow-list.
 **Are agent-sync's own backups pushed?**
 No. `pull` writes safety backups to `~/.agent-sync/backups/`, and the working clone lives in
 `~/.agent-sync/repo/` — both outside the directories agent-sync reads from. A `history push`
-only walks `~/.copilot/session-state/`, so backups never get re-uploaded.
+only walks the selected agent's session-history directory, so backups never get re-uploaded.
 
 **Which agents can I sync session history for?**
-Copilot CLI only, for now. `history` defaults to `--agent copilot`; Claude Code and Codex
-are reserved on the `--agent` flag and reported as "not supported yet" until implemented.
+Copilot CLI and Claude Code. `history` defaults to `--agent copilot`; use
+`--agent claude` for Claude Code. Codex is still reserved on the `--agent` flag and
+reported as "not supported yet" until implemented.
 
 ## License
 
@@ -512,15 +517,19 @@ agent-sync pull         # 把配置恢复到本地正确位置
 > 这部分同步是**显式 opt-in** 的，且**绝对建议只同步到私有仓库**。
 
 > [!NOTE]
-> 当前只支持 **GitHub Copilot CLI**。`history` 的 `--agent` 参数已经预留，
-> 未来可以扩展到 Claude / Codex，但今天只有 `--agent copilot`（默认值）可用。
+> 当前支持 **GitHub Copilot CLI** 和 **Claude Code**。`--agent copilot`（默认值）
+> 对应 `~/.copilot/session-state/`，`--agent claude` 对应
+> `~/.claude/projects/**/*.jsonl`。Codex 的接口已预留，但目前仍会提示
+> "not supported yet"。
 
-它可以把 Copilot CLI 的会话（plans、checkpoints、转录、产物）在不同机器之间带来带去。
+它可以把 Copilot CLI 和 Claude Code 的会话在不同机器之间带来带去。
 
 ```console
 $ agent-sync history list                  # 看本地 / 远端有哪些会话
+$ agent-sync history list --agent claude   # 查看 Claude Code 会话
 $ agent-sync history push                  # 把当前机器会话归档到远端（首次会确认）
 $ agent-sync history push --since 7d       # 只推最近 7 天改动过的会话
+$ agent-sync history push --agent claude   # 归档 Claude Code JSONL 会话
 $ agent-sync history pull --session 1a2b   # 在另一台机器恢复指定会话（支持前缀）
 ```
 
@@ -572,12 +581,12 @@ Updated shared session-store metadata for 9 session(s).
 | 命令 | 说明 |
 | --- | --- |
 | `agent-sync history list` | 列出本地与远端所有会话，展示大小、最后修改时间，以及 `synced` / `local-only` / `remote-only` 状态。 |
-| `agent-sync history push` | 把本机 Copilot 会话归档到仓库中的 `history/copilot/`。**追加式**同步，不会删除其他机器已经推上去的会话。 |
-| `agent-sync history pull` | 把会话恢复到 `~/.copilot/session-state/`，并合并对应的 `session-store.db` 元数据。覆盖前先备份，本地独有文件不会被删。 |
+| `agent-sync history push` | 把本机会话归档到仓库中的 `history/<agent>/`。**追加式**同步，不会删除其他机器已经推上去的会话。 |
+| `agent-sync history pull` | 把会话恢复到对应 agent 的本地历史目录。Copilot 会额外合并 `session-store.db` 元数据；Claude 会恢复 `~/.claude/projects/` 下的 JSONL 文件。 |
 
 | 参数 | 适用命令 | 作用 |
 | --- | --- | --- |
-| `--agent <name>` | push / pull / list | 选择同步哪个 agent。**默认 `copilot`**，目前也只支持它。 |
+| `--agent <name>` | push / pull / list | 选择同步哪个 agent。**默认 `copilot`**。当前支持：`copilot`、`claude`。 |
 | `--session <id>` | push / pull | 只处理一个会话（完整 id 或唯一前缀）。 |
 | `--since <window>` | push / list | 限制为最近一段时间改动过的会话，比如 `7d`、`2w`、`1m`（30 天）、`1y`，或直接写天数。 |
 | `--dry-run` | push / pull | 预览每个会话的文件树，不实际写入/推送。 |
@@ -590,12 +599,14 @@ Updated shared session-store metadata for 9 session(s).
 - 默认会**跳过活跃会话**（最近刚写入，或仍有 SQLite `-wal` / `-shm` sidecar），避免同步半写入状态或覆盖正在使用的会话。
 - 会排除明显的**凭据文件**（如 `.env`、`id_rsa`、`*.pem`、`.npmrc` 等），即使 history 模式绕过了普通配置同步的 allow-list。
 - 会过滤 **`*-wal` / `*-shm`**、临时目录、`node_modules`、`.git` 等路径，避免 torn copy 或体积过大。
-- 覆盖本地文件前会先备份到 `~/.agent-sync/backups/<timestamp>/history/copilot/`。
+- 覆盖本地文件前会先备份到 `~/.agent-sync/backups/<timestamp>/history/<agent>/`。
 
 > [!NOTE]
 > 对 **Copilot CLI** 而言，history sync 现在不仅同步磁盘上的 `session-state/`，
 > 还会同步对应的 `~/.copilot/session-store.db` 元数据，因此恢复后的会话能被
 > `copilot-starter` 和 Copilot 自己基于数据库的会话浏览器看到。
+> 对 **Claude Code** 而言，会话本身就是 `~/.claude/projects/` 下的 JSONL 文件，
+> 不需要额外的共享数据库。
 
 ### 跨设备恢复会话
 
@@ -676,7 +687,7 @@ agent-sync 把 home 目录看作不可信输入，并分四层保护：
 
 ### 路线图
 
-- [x] **Session history sync** —— 在多台机器间携带会话（Copilot CLI；需显式启用；仅建议私有仓库；有 active-session 与凭据保护）。
+- [x] **Session history sync** —— 在多台机器间携带会话（Copilot CLI 和 Claude Code；需显式启用；仅建议私有仓库；有 active-session 与凭据保护）。
 - [ ] **Memory sync** —— agent 的长期 memory / knowledge store。
 - [ ] **Selective profiles** —— 支持命名配置集（例如 `work` / `personal`）并独立 push/pull。
 - [ ] **Conflict review** —— 交互式按文件选择 `keep local` / `take remote` / `diff`。
@@ -703,4 +714,5 @@ agent-sync 把 home 目录看作不可信输入，并分四层保护：
 不会。备份写在 `~/.agent-sync/backups/`，工作副本在 `~/.agent-sync/repo/`，都不在 agent-sync 默认采集的目录里。
 
 **现在支持哪些 agent 的 session history？**  
-目前只有 Copilot CLI。`history` 默认就是 `--agent copilot`；Claude Code 和 Codex 的接口已经预留，但现在会明确提示“not supported yet”。
+目前支持 Copilot CLI 和 Claude Code。`history` 默认是 `--agent copilot`；
+使用 `--agent claude` 可同步 Claude Code。Codex 的接口已经预留，但现在会明确提示“not supported yet”。

@@ -62,14 +62,14 @@ export async function run(argv) {
   const history = program
     .command('history')
     .description(
-      'Sync agent session history across machines. Supports the Copilot CLI only for now; ' +
-        'the --agent flag reserves the interface for Claude/Codex later.'
+      'Sync agent session history across machines. Supports Copilot CLI and Claude Code for now; ' +
+        'the --agent flag reserves the interface for Codex later.'
     );
 
   history
     .command('push')
-    .description('Archive this machine\'s Copilot sessions to the remote (additive).')
-    .option('--agent <name>', 'Agent to sync (copilot only for now).', 'copilot')
+    .description('Archive this machine\'s agent sessions to the remote (additive).')
+    .option('--agent <name>', 'Agent to sync (copilot or claude).', 'copilot')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--since <window>', 'Only sessions modified within a window, e.g. 7d, 2w, 1m.')
     .option('--dry-run', 'Show what would be pushed without changing anything.')
@@ -80,8 +80,8 @@ export async function run(argv) {
 
   history
     .command('pull')
-    .description('Restore Copilot sessions from the remote into this machine.')
-    .option('--agent <name>', 'Agent to sync (copilot only for now).', 'copilot')
+    .description('Restore agent sessions from the remote into this machine.')
+    .option('--agent <name>', 'Agent to sync (copilot or claude).', 'copilot')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--dry-run', 'Show what would change locally without writing anything.')
     .option('--force', 'Overwrite even if the local session looks active.')
@@ -90,7 +90,7 @@ export async function run(argv) {
   history
     .command('list')
     .description('List local and remote sessions and their sync state.')
-    .option('--agent <name>', 'Agent to list (copilot only for now).', 'copilot')
+    .option('--agent <name>', 'Agent to list (copilot or claude).', 'copilot')
     .option('--since <window>', 'Narrow local sessions to a window, e.g. 7d, 2w, 1m.')
     .action((opts) => guard(() => historyList(opts)));
 
