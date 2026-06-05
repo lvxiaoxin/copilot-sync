@@ -21,7 +21,7 @@ export async function ensureRepoReady(cfg, { update = false } = {}) {
         await git(['clone', cfg.remote, dir], { interactive: true });
       } catch (e) {
         throw new UserError(
-          `Could not clone the remote. Run 'agent-sync onboard' to reconfigure.\n${
+          `Could not clone the remote. Run 'copilot-sync onboard' to reconfigure.\n${
             e.stderr || e.message
           }`
         );

@@ -8,17 +8,16 @@ import { isGitRepo } from '../git.js';
 
 export async function status() {
   const cfg = loadConfig();
-  log.plain(c.bold('agent-sync status'));
+  log.plain(c.bold('copilot-sync status'));
   log.info(`Host: ${c.bold(os.hostname())}   OS: ${c.bold(process.platform)} (${process.arch})`);
 
   if (!cfg || !cfg.remote) {
-    log.warn("Not onboarded. Run 'agent-sync onboard' to configure a remote repo.");
+    log.warn("Not onboarded. Run 'copilot-sync onboard' to configure a remote repo.");
     return;
   }
 
   log.info(`Remote:  ${c.bold(cfg.remote)}`);
   log.info(`Branch:  ${c.bold(cfg.branch)}`);
-  log.info(`Agents:  ${c.bold((cfg.agents || []).join(', '))}`);
   log.info(`Clone:   ${exists(repoDir()) && isGitRepo(repoDir()) ? c.green('present') : c.yellow('not cloned yet')} ${c.dim(repoDir())}`);
 
   const manifest = resolveManifest(cfg.manifest);
@@ -35,5 +34,5 @@ export async function status() {
     );
   }
   log.plain('');
-  log.info(c.dim('Run `agent-sync push --dry-run` or `agent-sync pull --dry-run` for details.'));
+  log.info(c.dim('Run `copilot-sync push --dry-run` or `copilot-sync pull --dry-run` for details.'));
 }

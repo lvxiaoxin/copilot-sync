@@ -1,38 +1,36 @@
 {
-  "name": "@lvxiaoxin/agent-sync",
+  "name": "@lvxiaoxin/copilot-sync",
   "version": "0.2.3",
-  "description": "Cross-platform CLI to sync AI agent config artifacts (Copilot, Claude, Codex) across devboxes via a GitHub repo.",
+  "description": "Cross-platform CLI to sync GitHub Copilot config and session history across devboxes via a GitHub repo.",
   "type": "module",
   "bin": {
-    "agent-sync": "bin/agent-sync.js"
+    "copilot-sync": "bin/copilot-sync.js"
   },
   "files": [
     "bin",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18.17"
   },
   "scripts": {
-    "start": "node bin/agent-sync.js",
-    "prepublishOnly": "node -e \"['bin/agent-sync.js'].forEach(f=>require('node:child_process').execFileSync(process.execPath,['--check',f],{stdio:'inherit'}))\""
+    "start": "node bin/copilot-sync.js",
+    "prepublishOnly": "node -e \"['bin/copilot-sync.js'].forEach(f=>require('node:child_process').execFileSync(process.execPath,['--check',f],{stdio:'inherit'}))\""
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lvxiaoxin/agent-sync.git"
+    "url": "git+https://github.com/lvxiaoxin/copilot-sync.git"
   },
-  "homepage": "https://github.com/lvxiaoxin/agent-sync#readme",
+  "homepage": "https://github.com/lvxiaoxin/copilot-sync#readme",
   "bugs": {
-    "url": "https://github.com/lvxiaoxin/agent-sync/issues"
+    "url": "https://github.com/lvxiaoxin/copilot-sync/issues"
   },
   "author": "lvxiaoxin",
   "keywords": [
-    "agent",
     "sync",
     "copilot",
-    "claude",
-    "codex",
     "mcp",
     "skills",
     "cli",

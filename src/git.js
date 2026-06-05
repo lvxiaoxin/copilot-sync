@@ -57,9 +57,9 @@ export async function ensureIdentity(cwd) {
   } catch {
     hasEmail = false;
   }
-  if (!hasName) await git(['config', 'user.name', 'agent-sync'], { cwd });
+  if (!hasName) await git(['config', 'user.name', 'copilot-sync'], { cwd });
   if (!hasEmail)
-    await git(['config', 'user.email', 'agent-sync@localhost'], { cwd });
+    await git(['config', 'user.email', 'copilot-sync@localhost'], { cwd });
   return { usedFallback: !hasName || !hasEmail };
 }
 

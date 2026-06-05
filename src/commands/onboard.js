@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { log, c, UserError } from '../log.js';
+import { log, c } from '../log.js';
 import { createPrompter } from '../prompt.js';
 import { loadConfig, saveConfig, repoDir, appHome } from '../config.js';
-import { AGENTS } from '../manifest.js';
 import { ensureDir, rmrf, exists, assertInside } from '../fsutil.js';
 import { ensureGitAvailable, git, isGitRepo } from '../git.js';
 
@@ -18,7 +17,7 @@ function normalizeRemote(input) {
   return v;
 }
 
-const GITATTRIBUTES = `# Managed by agent-sync — keep line endings stable across OSes.
+const GITATTRIBUTES = `# Managed by copilot-sync — keep line endings stable across OSes.
 * text=auto
 *.sh text eol=lf
 *.bash text eol=lf
@@ -35,23 +34,23 @@ const GITATTRIBUTES = `# Managed by agent-sync — keep line endings stable acro
 *.cmd text eol=crlf
 `;
 
-const README = `# agent-sync store
+const README = `# copilot-sync store
 
-This repository is managed by [agent-sync](https://www.npmjs.com/package/@lvxiaoxin/agent-sync).
-It holds shareable AI agent artifacts (skills, MCP configs, agents, prompts, settings)
-for Copilot, Claude, and Codex.
+This repository is managed by [copilot-sync](https://www.npmjs.com/package/@lvxiaoxin/copilot-sync).
+It holds shareable GitHub Copilot artifacts (skills, MCP config, agents, prompts, settings)
+and opt-in Copilot CLI session history.
 
-- \`agent-sync push\` uploads this machine's artifacts here.
-- \`agent-sync pull\` applies them on another machine.
+- \`copilot-sync push\` uploads this machine's artifacts here.
+- \`copilot-sync pull\` applies them on another machine.
 
-Do not store secrets here. agent-sync secret-scans every push.
+Do not store secrets here. copilot-sync secret-scans every push.
 `;
 
 export async function onboard() {
   await ensureGitAvailable();
 
   const prompt = createPrompter();
-  let remote, branch, agents, existingCfg;
+  let remote, branch, existingCfg;
   try {
     const existing = loadConfig();
     existingCfg = existing;
@@ -64,8 +63,8 @@ export async function onboard() {
       }
     }
 
-    log.plain(c.bold('\nagent-sync onboarding'));
-    log.info('This sets the GitHub repo used to store/sync your agent configs.\n');
+    log.plain(c.bold('\ncopilot-sync onboarding'));
+    log.info('This sets the GitHub repo used to store/sync your Copilot configs.\n');
 
     remote = '';
     while (!remote) {
@@ -79,15 +78,6 @@ export async function onboard() {
 
     branch = (await prompt.ask('Branch', { default: existing?.branch || 'main' })) || 'main';
 
-    log.plain('');
-    log.info(`Agents to sync: ${c.bold(AGENTS.join(', '))} (default: all)`);
-    const chosen = await prompt.ask('Comma-separated subset, or blank for all', {});
-    agents = chosen
-      ? chosen.split(',').map((s) => s.trim()).filter((a) => AGENTS.includes(a))
-      : AGENTS.slice();
-    if (!agents.length) {
-      throw new UserError('No valid agents selected.');
-    }
   } finally {
     prompt.close();
   }
@@ -96,7 +86,6 @@ export async function onboard() {
     version: 1,
     remote,
     branch,
-    agents,
     createdAt: existingCfg?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -149,6 +138,6 @@ export async function onboard() {
 
   log.ok('Onboarding complete.');
   log.plain('');
-  log.info(`Next: ${c.bold('agent-sync push')} on this machine, then ${c.bold('agent-sync pull')} on the others.`);
+  log.info(`Next: ${c.bold('copilot-sync push')} on this machine, then ${c.bold('copilot-sync pull')} on the others.`);
   log.info(`Host: ${c.dim(os.hostname())}  OS: ${c.dim(process.platform)}`);
 }

@@ -59,11 +59,7 @@ function privacyReminder() {
   log.warn('Only sync to a ' + c.bold('private') + ' repository.');
 }
 
-function archiveNote(agent) {
-  if (!agent.sharedStore) {
-    log.info(c.dim(`Note: this archives/restores ${agent.label} session files.`));
-    return;
-  }
+function archiveNote() {
   log.info(
     c.dim(
       'Note: this archives/restores the session folder and its shared session-store metadata ' +
@@ -81,17 +77,6 @@ function displayPathForSession(agent, sessionId, rel) {
 }
 
 function remoteFilesForSession(repoHistory, agent, session) {
-  if (agent.layout === 'jsonl-projects') {
-    const src = path.join(repoHistory, ...session.rel.split('/'));
-    return [
-      {
-        rel: session.rel,
-        src,
-        treePath: displayPathForSession(agent, session.id, session.rel),
-      },
-    ];
-  }
-
   const sessRepo = path.join(repoHistory, ...session.rel.split('/'));
   const files = [];
   for (const node of walk(sessRepo, '', HISTORY_DENY)) {
@@ -111,12 +96,11 @@ function remoteFilesForSession(repoHistory, agent, session) {
 export async function historyPush(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
-  const agent = resolveAgent(opts.agent);
+  const agent = resolveAgent();
   const since = opts.since != null ? parseSince(opts.since) : null;
 
   log.plain(
-    c.bold('agent-sync history push') +
-      c.dim(`  agent: ${agent.name}`) +
+    c.bold('copilot-sync history push') +
       (since ? c.dim(`  since: ${opts.since}`) : '') +
       (opts.dryRun ? c.dim('  (dry run)') : '')
   );
@@ -140,7 +124,7 @@ export async function historyPush(opts = {}) {
     selected = selected.filter((s) => s.mtimeMs >= since);
   }
 
-  const collected = selected.map((s) => collectSession(s, agent.name));
+  const collected = selected.map((s) => collectSession(s));
   const allFiles = collected.flatMap((x) => x.files);
 
   privacyReminder();
@@ -283,7 +267,7 @@ export async function historyPush(opts = {}) {
 
   const id = await ensureIdentity(dir);
   if (id.usedFallback) {
-    log.warn('No git identity found; committing as "agent-sync <agent-sync@localhost>".');
+    log.warn('No git identity found; committing as "copilot-sync <copilot-sync@localhost>".');
   }
 
   // Additive: stage additions/modifications under the history tree only, and
@@ -327,11 +311,10 @@ export async function historyPush(opts = {}) {
 export async function historyPull(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
-  const agent = resolveAgent(opts.agent);
+  const agent = resolveAgent();
 
   log.plain(
-    c.bold('agent-sync history pull') +
-      c.dim(`  agent: ${agent.name}`) +
+    c.bold('copilot-sync history pull') +
       (opts.dryRun ? c.dim('  (dry run)') : '')
   );
 
@@ -339,7 +322,7 @@ export async function historyPull(opts = {}) {
   const repoHistory = historyRepoDir(dir, agent.name);
   const remoteSessions = listRemoteSessions(repoHistory, agent.name);
   if (!remoteSessions.length) {
-    log.warn('No session history in the remote yet. Run `agent-sync history push` elsewhere first.');
+    log.warn('No session history in the remote yet. Run `copilot-sync history push` elsewhere first.');
     return;
   }
 
@@ -473,7 +456,7 @@ export async function historyPull(opts = {}) {
       log.plain(
         c.dim('On a real pull, files marked ') +
           c.yellow('overwrite') +
-          c.dim(' are backed up to ~/.agent-sync/backups/ first.')
+          c.dim(' are backed up to ~/.copilot-sync/backups/ first.')
       );
     }
     return;
@@ -519,7 +502,7 @@ export async function historyPull(opts = {}) {
       `${missingIndex + indexedMissing} session(s) were restored without shared session-store metadata.`
     );
   }
-  archiveNote(agent);
+  archiveNote();
 }
 
 // ---- history list ---------------------------------------------------------
@@ -527,7 +510,7 @@ export async function historyPull(opts = {}) {
 export async function historyList(opts = {}) {
   const cfg = requireConfig();
   await ensureGitAvailable();
-  const agent = resolveAgent(opts.agent);
+  const agent = resolveAgent();
   const since = opts.since != null ? parseSince(opts.since) : null;
 
   const dir = await ensureRepoReady(cfg, { update: true });
@@ -538,7 +521,7 @@ export async function historyList(opts = {}) {
   const remoteIds = listRemoteSessionIds(repoHistory, agent.name);
   const remoteSet = new Set(remoteIds);
 
-  log.plain(c.bold('agent-sync history') + c.dim(`  agent: ${agent.name}`));
+  log.plain(c.bold('copilot-sync history'));
   log.info(
     `Local sessions:  ${local.length}` +
       (since != null ? c.dim(` (within --since ${opts.since})`) : '') +
@@ -583,6 +566,6 @@ export async function historyList(opts = {}) {
 
   log.plain('');
   log.info(
-    `Push: ${c.bold('agent-sync history push')} · Pull: ${c.bold('agent-sync history pull --session <id>')} (id prefix ok).`
+    `Push: ${c.bold('copilot-sync history push')} · Pull: ${c.bold('copilot-sync history pull --session <id>')} (id prefix ok).`
   );
 }

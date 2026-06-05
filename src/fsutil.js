@@ -144,7 +144,7 @@ export function ensureDir(p) {
 // rename into place. Tolerates locked targets better than in-place writes.
 export function writeFileAtomic(dest, data, mode) {
   ensureDir(path.dirname(dest));
-  const tmp = `${dest}.agent-sync-tmp-${process.pid}-${Date.now()}`;
+  const tmp = `${dest}.copilot-sync-tmp-${process.pid}-${Date.now()}`;
   fs.writeFileSync(tmp, data);
   if (mode !== undefined && process.platform !== 'win32') {
     try {

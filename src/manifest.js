@@ -1,29 +1,9 @@
-// Default sync policy. `include` paths are relative to each agent's base dir
+// Default sync policy. `include` paths are relative to the Copilot base dir
 // and may be files or directories. Anything not included is never collected.
-//
-// IMPORTANT: codex/config.toml is intentionally NOT included by default because
-// it commonly embeds secrets (e.g. ANTHROPIC_AUTH_TOKEN under
-// [shell_environment_policy.set]). Users can opt in via their config, but it is
-// still secret-scanned on every push.
 export const DEFAULT_MANIFEST = {
   copilot: {
     base: '~/.copilot',
     include: ['mcp-config.json', 'settings.json', 'skills', 'agents', 'prompts'],
-  },
-  claude: {
-    base: '~/.claude',
-    include: [
-      'settings.json',
-      'skills',
-      'agents',
-      'commands',
-      'output-styles',
-      'CLAUDE.md',
-    ],
-  },
-  codex: {
-    base: '~/.codex',
-    include: ['AGENTS.md', 'skills', 'prompts'],
   },
 };
 
@@ -36,12 +16,10 @@ export const AGENTS = Object.keys(DEFAULT_MANIFEST);
 export const HARD_DENY = [
   '**/config.json',
   '**/settings.local.json',
-  '**/.claude.json',
   '**/sessions/**',
   '**/session-state/**',
   '**/session-env/**',
   '**/session-store.db*',
-  '**/projects/**',
   '**/todos/**',
   '**/history.jsonl',
   '**/command-history-state.json',
@@ -66,7 +44,6 @@ export const HARD_DENY = [
   '**/tmp/**',
   '**/installation_id',
   '**/version.json',
-  '**/.codex-global-state.json*',
   '**/.personality_migration',
   '**/.last-cleanup',
   '**/stats-cache.json',
@@ -82,6 +59,7 @@ export const HARD_DENY = [
   '**/node_modules/**',
   '**/.git/**',
   '**/.DS_Store',
+  '**/.agent-sync-meta.json',
 ];
 
 // Merge user overrides (from config) on top of the defaults.

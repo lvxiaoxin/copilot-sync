@@ -29,9 +29,9 @@ export async function run(argv) {
   const program = new Command();
 
   program
-    .name('agent-sync')
+    .name('copilot-sync')
     .description(
-      'Sync AI agent config artifacts (Copilot, Claude, Codex) across machines via a GitHub repo.'
+      'Sync GitHub Copilot config artifacts and session history across machines via a GitHub repo.'
     )
     .version(pkg.version);
 
@@ -42,14 +42,14 @@ export async function run(argv) {
 
   program
     .command('push')
-    .description('Collect this machine\'s agent artifacts and push them to the remote.')
+    .description('Collect this machine\'s Copilot artifacts and push them to the remote.')
     .option('--dry-run', 'Show what would be pushed without changing anything.')
     .option('--unsafe-allow', 'Bypass the deny-list and secret scan (discouraged).')
     .action((opts) => guard(() => push(opts)));
 
   program
     .command('pull')
-    .description('Pull the remote and apply agent artifacts into this OS\'s config dirs.')
+    .description('Pull the remote and apply Copilot artifacts into this OS\'s config dirs.')
     .option('--dry-run', 'Show what would change locally without writing anything.')
     .option('--unsafe-allow', 'Bypass the deny-list when dispatching files (discouraged).')
     .action((opts) => guard(() => pull(opts)));
@@ -61,15 +61,11 @@ export async function run(argv) {
 
   const history = program
     .command('history')
-    .description(
-      'Sync agent session history across machines. Supports Copilot CLI and Claude Code for now; ' +
-        'the --agent flag reserves the interface for Codex later.'
-    );
+    .description('Sync Copilot CLI session history across machines.');
 
   history
     .command('push')
-    .description('Archive this machine\'s agent sessions to the remote (additive).')
-    .option('--agent <name>', 'Agent to sync (copilot or claude).', 'copilot')
+    .description('Archive this machine\'s Copilot sessions to the remote (additive).')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--since <window>', 'Only sessions modified within a window, e.g. 7d, 2w, 1m.')
     .option('--dry-run', 'Show what would be pushed without changing anything.')
@@ -80,8 +76,7 @@ export async function run(argv) {
 
   history
     .command('pull')
-    .description('Restore agent sessions from the remote into this machine.')
-    .option('--agent <name>', 'Agent to sync (copilot or claude).', 'copilot')
+    .description('Restore Copilot sessions from the remote into this machine.')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--dry-run', 'Show what would change locally without writing anything.')
     .option('--force', 'Overwrite even if the local session looks active.')
@@ -90,7 +85,6 @@ export async function run(argv) {
   history
     .command('list')
     .description('List local and remote sessions and their sync state.')
-    .option('--agent <name>', 'Agent to list (copilot or claude).', 'copilot')
     .option('--since <window>', 'Narrow local sessions to a window, e.g. 7d, 2w, 1m.')
     .action((opts) => guard(() => historyList(opts)));
 

@@ -17,7 +17,7 @@ import { ensureGitAvailable, git, ensureIdentity } from '../git.js';
 import { ensureRepoReady } from '../repo.js';
 import { renderTree } from '../tree.js';
 
-const META_FILE = '.agent-sync-meta.json';
+const META_FILE = '.copilot-sync-meta.json';
 
 export async function push(opts = {}) {
   const cfg = requireConfig();
@@ -48,7 +48,7 @@ export async function push(opts = {}) {
   }
 
   // 3. Report.
-  log.plain(c.bold('agent-sync push'));
+  log.plain(c.bold('copilot-sync push'));
   for (const agent of agents) {
     const r = collected[agent];
     log.info(
@@ -71,8 +71,8 @@ export async function push(opts = {}) {
     log.plain('');
     log.info('Fix options:');
     log.info('  • Remove the secret / move it to an env var or untracked file.');
-    log.info('  • Exclude the file via your manifest in ~/.agent-sync/config.json.');
-    log.info(`  • Override (not recommended): ${c.bold('agent-sync push --unsafe-allow')}`);
+    log.info('  • Exclude the file via your manifest in ~/.copilot-sync/config.json.');
+    log.info(`  • Override (not recommended): ${c.bold('copilot-sync push --unsafe-allow')}`);
     throw new UserError('Aborted: secret-like content found.');
   }
 
@@ -128,7 +128,7 @@ export async function push(opts = {}) {
   // 5. Commit & push.
   const id = await ensureIdentity(dir);
   if (id.usedFallback) {
-    log.warn('No git identity found; committing as "agent-sync <agent-sync@localhost>".');
+    log.warn('No git identity found; committing as "copilot-sync <copilot-sync@localhost>".');
   }
 
   await git(['add', '-A'], { cwd: dir });
@@ -153,5 +153,5 @@ export async function push(opts = {}) {
     );
   }
 
-  log.ok(`Pushed ${totalFiles} file(s) across ${agents.length} agent(s).`);
+  log.ok(`Pushed ${totalFiles} file(s).`);
 }

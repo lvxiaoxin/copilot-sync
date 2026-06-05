@@ -13,74 +13,25 @@ import {
 } from './fsutil.js';
 import { UserError } from './log.js';
 
-// Each agent stores sessions differently, so support is described per-agent
-// rather than hard-coded. The command surface and repo layout are shared:
-// history/<agent>/<sessionsSubdir>/...
-export const HISTORY_AGENTS = {
-  copilot: {
-    name: 'copilot',
-    label: 'GitHub Copilot CLI',
-    base: DEFAULT_MANIFEST.copilot.base, // ~/.copilot
-    layout: 'directory',
-    sessionsSubdir: 'session-state', // ~/.copilot/session-state/<uuid>/
-    sharedStore: 'session-store.db', // ~/.copilot/session-store.db
-    supported: true,
-  },
-  claude: {
-    name: 'claude',
-    label: 'Claude Code',
-    base: DEFAULT_MANIFEST.claude.base, // ~/.claude
-    layout: 'jsonl-projects',
-    sessionsSubdir: 'projects', // ~/.claude/projects/<project>/<uuid>.jsonl
-    supported: true,
-  },
-  // Planned — layout noted for reference; not enabled yet.
-  codex: {
-    name: 'codex',
-    label: 'Codex CLI',
-    base: DEFAULT_MANIFEST.codex.base, // ~/.codex
-    layout: 'directory',
-    sessionsSubdir: 'sessions',
-    supported: false,
-  },
-};
+export const HISTORY_AGENT = 'copilot';
+export const HISTORY_LABEL = 'GitHub Copilot CLI';
+export const SESSIONS_SUBDIR = 'session-state';
+export const SHARED_STORE = 'session-store.db';
+export const META_FILE = '.copilot-sync-meta.json';
+export const LEGACY_META_FILE = '.agent-sync-meta.json';
 
-export const DEFAULT_HISTORY_AGENT = 'copilot';
-
-// Back-compat: the default agent's identifiers, used where a single agent is
-// assumed. New code should prefer resolveAgent()/the spec fields.
-export const HISTORY_AGENT = DEFAULT_HISTORY_AGENT;
-export const SESSIONS_SUBDIR = HISTORY_AGENTS[DEFAULT_HISTORY_AGENT].sessionsSubdir;
-export const META_FILE = '.agent-sync-meta.json';
-
-// Validate a --agent value and return its descriptor. Defaults to Copilot.
-// Known-but-unsupported agents get a friendly "not yet" message so the
-// Copilot-only scope is explicit; unknown names list what's available.
-export function resolveAgent(name) {
-  const key = String(name || DEFAULT_HISTORY_AGENT).trim().toLowerCase();
-  const spec = HISTORY_AGENTS[key];
-  if (!spec) {
-    const supported = Object.values(HISTORY_AGENTS)
-      .filter((s) => s.supported)
-      .map((s) => s.name)
-      .join(', ');
-    throw new UserError(`Unknown agent "${name}". History sync supports: ${supported}.`);
+export function resolveAgent(name = HISTORY_AGENT) {
+  const key = String(name || HISTORY_AGENT).trim().toLowerCase();
+  if (key !== HISTORY_AGENT) {
+    throw new UserError('copilot-sync only supports Copilot history.');
   }
-  if (!spec.supported) {
-    const supported = Object.values(HISTORY_AGENTS)
-      .filter((s) => s.supported)
-      .map((s) => s.name)
-      .join(', ');
-    throw new UserError(
-      `Session-history sync for ${spec.label} isn't supported yet. Supported agents: ${supported}.`
-    );
-  }
-  return spec;
-}
-
-function specOf(agent) {
-  if (agent && typeof agent === 'object' && agent.name) return agent;
-  return HISTORY_AGENTS[agent || DEFAULT_HISTORY_AGENT] || HISTORY_AGENTS[DEFAULT_HISTORY_AGENT];
+  return {
+    name: HISTORY_AGENT,
+    label: HISTORY_LABEL,
+    base: DEFAULT_MANIFEST.copilot.base,
+    sessionsSubdir: SESSIONS_SUBDIR,
+    sharedStore: SHARED_STORE,
+  };
 }
 
 // Parse a --since window (e.g. "7d", "2w", "1m"/"1mo", "30") into an absolute
@@ -102,7 +53,7 @@ export function parseSince(input) {
   let mult = DAY;
   if (unit.startsWith('w')) mult = 7 * DAY;
   else if (unit.startsWith('y')) mult = 365 * DAY;
-  else if (unit === 'm' || unit.startsWith('mo')) mult = 30 * DAY; // month ≈ 30 days
+  else if (unit === 'm' || unit.startsWith('mo')) mult = 30 * DAY; // month approx 30 days
   return Date.now() - n * mult;
 }
 
@@ -152,19 +103,16 @@ export const HARD_FILE_LIMIT = 95 * 1024 * 1024;
 export const WARN_FILE_LIMIT = 50 * 1024 * 1024;
 export const WARN_TOTAL = 100 * 1024 * 1024;
 
-export function agentBase(agent = DEFAULT_HISTORY_AGENT) {
-  return expandHome(specOf(agent).base);
+export function agentBase() {
+  return expandHome(DEFAULT_MANIFEST.copilot.base);
 }
 
-export function sessionsRoot(agent = DEFAULT_HISTORY_AGENT) {
-  const spec = specOf(agent);
-  return path.join(expandHome(spec.base), spec.sessionsSubdir);
+export function sessionsRoot() {
+  return path.join(agentBase(), SESSIONS_SUBDIR);
 }
 
-export function sharedStorePath(agent = DEFAULT_HISTORY_AGENT) {
-  const spec = specOf(agent);
-  if (!spec.sharedStore) return null;
-  return path.join(expandHome(spec.base), spec.sharedStore);
+export function sharedStorePath() {
+  return path.join(agentBase(), SHARED_STORE);
 }
 
 export function fmtSize(n) {
@@ -178,7 +126,7 @@ export function fmtSize(n) {
   return `${i === 0 || v >= 10 ? Math.round(v) : v.toFixed(1)}${u[i]}`;
 }
 
-function statDirectorySession(dir, id, spec) {
+function statSession(dir, id) {
   let mtimeMs = 0;
   let sizeBytes = 0;
   let fileCount = 0;
@@ -200,9 +148,8 @@ function statDirectorySession(dir, id, spec) {
   const active = hasWal || (mtimeMs > 0 && Date.now() - mtimeMs < ACTIVE_WINDOW_MS);
   return {
     id,
-    kind: 'directory',
     dir,
-    rel: `${spec.sessionsSubdir}/${id}`,
+    rel: `${SESSIONS_SUBDIR}/${id}`,
     mtimeMs,
     sizeBytes,
     fileCount,
@@ -210,63 +157,10 @@ function statDirectorySession(dir, id, spec) {
   };
 }
 
-function statFileSession(file, id, rel, projectDir) {
-  const st = fs.statSync(file);
-  return {
-    id,
-    kind: 'file',
-    file,
-    dir: path.dirname(file),
-    rel,
-    projectDir,
-    mtimeMs: st.mtimeMs,
-    sizeBytes: st.size,
-    fileCount: 1,
-    active: Date.now() - st.mtimeMs < ACTIVE_WINDOW_MS,
-  };
-}
-
-// Enumerate local sessions for an agent, newest first.
-export function listLocalSessions(agent = DEFAULT_HISTORY_AGENT) {
-  const spec = specOf(agent);
-  const root = sessionsRoot(spec.name);
+// Enumerate local Copilot sessions, newest first.
+export function listLocalSessions() {
+  const root = sessionsRoot();
   if (!exists(root)) return [];
-  if (spec.layout === 'jsonl-projects') {
-    const sessions = [];
-    let projectDirs;
-    try {
-      projectDirs = fs
-        .readdirSync(root, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.isSymbolicLink())
-        .map((d) => d.name);
-    } catch {
-      return [];
-    }
-    for (const projectDir of projectDirs) {
-      const projectPath = path.join(root, projectDir);
-      let files;
-      try {
-        files = fs
-          .readdirSync(projectPath, { withFileTypes: true })
-          .filter((d) => d.isFile() && !d.isSymbolicLink() && d.name.endsWith('.jsonl'))
-          .map((d) => d.name);
-      } catch {
-        continue;
-      }
-      for (const fileName of files) {
-        const file = path.join(projectPath, fileName);
-        const id = path.basename(fileName, '.jsonl');
-        const rel = `${spec.sessionsSubdir}/${projectDir}/${fileName}`;
-        try {
-          sessions.push(statFileSession(file, id, rel, projectDir));
-        } catch {
-          /* vanished while listing */
-        }
-      }
-    }
-    return sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  }
-
   let names;
   try {
     names = fs
@@ -277,7 +171,7 @@ export function listLocalSessions(agent = DEFAULT_HISTORY_AGENT) {
     return [];
   }
   return names
-    .map((id) => statDirectorySession(path.join(root, id), id, spec))
+    .map((id) => statSession(path.join(root, id), id))
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
@@ -297,7 +191,7 @@ export function resolveSelector(selector, items) {
   if (matches.length > 1) {
     const sample = matches.slice(0, 5).map((m) => m.id).join(', ');
     throw new UserError(
-      `--session "${selector}" is ambiguous (${matches.length} matches: ${sample}…). Use a longer id.`
+      `--session "${selector}" is ambiguous (${matches.length} matches: ${sample}...). Use a longer id.`
     );
   }
   return matches;
@@ -305,33 +199,15 @@ export function resolveSelector(selector, items) {
 
 // Collect the concrete files to sync for one local session.
 // Returns { id, active, files:[{rel,abs,mode,size}], symlinks, sensitive, denied }.
-// `rel` is posix and relative to the agent base (e.g. session-state/<id>/plan.md).
-export function collectSession(session, agent = DEFAULT_HISTORY_AGENT) {
-  const spec = specOf(agent);
-  const base = agentBase(spec.name);
+// `rel` is posix and relative to ~/.copilot, e.g. session-state/<id>/plan.md.
+export function collectSession(session) {
+  const base = agentBase();
+  const dir = session.dir;
+  const relPrefix = session.rel || `${SESSIONS_SUBDIR}/${session.id}`;
   const files = [];
   const symlinks = [];
   const sensitive = [];
   const denied = [];
-
-  if (spec.layout === 'jsonl-projects') {
-    const rel = session.rel;
-    if (matchesAny(path.basename(rel).toLowerCase(), SENSITIVE_DENY)) {
-      sensitive.push(rel);
-      return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
-    }
-    try {
-      assertInside(base, session.file, 'session path');
-      const st = fs.statSync(session.file);
-      files.push({ rel, abs: session.file, mode: st.mode, size: st.size });
-    } catch {
-      denied.push(rel);
-    }
-    return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
-  }
-
-  const dir = session.dir;
-  const relPrefix = session.rel || `${spec.sessionsSubdir}/${session.id}`;
 
   for (const node of walk(dir, '', HISTORY_DENY)) {
     const rel = `${relPrefix}/${node.rel}`;
@@ -370,71 +246,39 @@ export function collectSession(session, agent = DEFAULT_HISTORY_AGENT) {
 }
 
 // List the sessions present in the remote clone's history tree.
-export function listRemoteSessions(historyRepo, agent = DEFAULT_HISTORY_AGENT) {
-  const spec = specOf(agent);
-  const root = path.join(historyRepo, spec.sessionsSubdir);
+export function listRemoteSessions(historyRepo) {
+  const root = path.join(historyRepo, SESSIONS_SUBDIR);
   if (!exists(root)) return [];
-  if (spec.layout === 'jsonl-projects') {
-    const sessions = [];
-    let projectDirs;
-    try {
-      projectDirs = fs
-        .readdirSync(root, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !d.isSymbolicLink())
-        .map((d) => d.name);
-    } catch {
-      return [];
-    }
-    for (const projectDir of projectDirs) {
-      const projectPath = path.join(root, projectDir);
-      let files;
-      try {
-        files = fs
-          .readdirSync(projectPath, { withFileTypes: true })
-          .filter((d) => d.isFile() && !d.isSymbolicLink() && d.name.endsWith('.jsonl'))
-          .map((d) => d.name);
-      } catch {
-        continue;
-      }
-      for (const fileName of files) {
-        sessions.push({
-          id: path.basename(fileName, '.jsonl'),
-          rel: `${spec.sessionsSubdir}/${projectDir}/${fileName}`,
-          projectDir,
-        });
-      }
-    }
-    return sessions;
-  }
-
   try {
     return fs
       .readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory())
-      .map((d) => ({ id: d.name, rel: `${spec.sessionsSubdir}/${d.name}` }));
+      .map((d) => ({ id: d.name, rel: `${SESSIONS_SUBDIR}/${d.name}` }));
   } catch {
     return [];
   }
 }
 
-// List the session ids present in the remote clone's history tree.
-export function listRemoteSessionIds(historyRepo, agent = DEFAULT_HISTORY_AGENT) {
-  return listRemoteSessions(historyRepo, agent).map((s) => s.id);
+export function listRemoteSessionIds(historyRepo) {
+  return listRemoteSessions(historyRepo).map((s) => s.id);
 }
 
 export function readHistoryMeta(historyRepo) {
-  const p = path.join(historyRepo, META_FILE);
-  if (!exists(p)) return { version: 1, modes: {} };
-  try {
-    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return { version: 1, modes: j.modes || {} };
-  } catch {
-    return { version: 1, modes: {} };
+  for (const fileName of [META_FILE, LEGACY_META_FILE]) {
+    const p = path.join(historyRepo, fileName);
+    if (!exists(p)) continue;
+    try {
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return { version: 1, modes: j.modes || {} };
+    } catch {
+      return { version: 1, modes: {} };
+    }
   }
+  return { version: 1, modes: {} };
 }
 
 // Persist exec-bit modes. Always writes (even when empty) so that cleared
-// entries — e.g. a script that lost its +x bit — are not resurrected on pull.
+// entries, e.g. a script that lost its +x bit, are not resurrected on pull.
 export function writeHistoryMeta(historyRepo, meta) {
   const modes = (meta && meta.modes) || {};
   ensureDir(historyRepo);

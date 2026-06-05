@@ -17,7 +17,8 @@ import { ensureGitAvailable } from '../git.js';
 import { ensureRepoReady } from '../repo.js';
 import { renderTree } from '../tree.js';
 
-const META_FILE = '.agent-sync-meta.json';
+const META_FILE = '.copilot-sync-meta.json';
+const LEGACY_META_FILE = '.agent-sync-meta.json';
 
 export async function pull(opts = {}) {
   const cfg = requireConfig();
@@ -35,7 +36,7 @@ export async function pull(opts = {}) {
   let unchanged = 0;
   let skippedLocked = 0;
 
-  log.plain(c.bold('agent-sync pull') + (opts.dryRun ? c.dim('  (dry run)') : ''));
+  log.plain(c.bold('copilot-sync pull') + (opts.dryRun ? c.dim('  (dry run)') : ''));
   log.plain('');
 
   for (const agent of agents) {
@@ -49,9 +50,11 @@ export async function pull(opts = {}) {
     const base = expandHome(manifest[agent].base);
     let modes = {};
     const metaPath = path.join(agentRepo, META_FILE);
-    if (exists(metaPath)) {
+    const legacyMetaPath = path.join(agentRepo, LEGACY_META_FILE);
+    const readableMetaPath = exists(metaPath) ? metaPath : legacyMetaPath;
+    if (exists(readableMetaPath)) {
       try {
-        modes = JSON.parse(fs.readFileSync(metaPath, 'utf8')).modes || {};
+        modes = JSON.parse(fs.readFileSync(readableMetaPath, 'utf8')).modes || {};
       } catch {
         modes = {};
       }
@@ -62,7 +65,7 @@ export async function pull(opts = {}) {
     for (const node of walk(agentRepo, '', ['**/.git/**'])) {
       if (node.type !== 'file') continue;
       const rel = node.rel;
-      if (rel === META_FILE) continue;
+      if (rel === META_FILE || rel === LEGACY_META_FILE) continue;
       if (!allowUnsafe && matchesAny(rel, HARD_DENY)) continue;
 
       const src = path.join(agentRepo, ...rel.split('/'));
@@ -143,7 +146,7 @@ export async function pull(opts = {}) {
     log.plain(c.dim('Dry run — no changes written. ') + parts.join(c.dim(', ')) + c.dim('.'));
     if (overwritten) {
       log.plain(c.dim('On a real pull, files marked ') + c.yellow('overwrite') +
-        c.dim(` are backed up to ~/.agent-sync/backups/ first.`));
+        c.dim(` are backed up to ~/.copilot-sync/backups/ first.`));
     }
     return;
   }
