@@ -21,6 +21,7 @@ import {
   HISTORY_DENY,
   agentBase,
   sessionsRoot,
+  sharedStorePath,
   fmtSize,
   listLocalSessions,
   listRemoteSessionIds,
@@ -34,6 +35,12 @@ import {
   WARN_FILE_LIMIT,
   WARN_TOTAL,
 } from '../history.js';
+import {
+  exportSessionIndex,
+  importSessionIndexes,
+  readSessionIndexFile,
+  writeSessionIndexFile,
+} from '../history-store.js';
 
 function historyRepoDir(repo, agent = HISTORY_AGENT) {
   return path.join(repo, 'history', agent);
@@ -55,8 +62,8 @@ function privacyReminder() {
 function archiveNote() {
   log.info(
     c.dim(
-      'Note: this archives/restores the on-disk session folder. Whether the Copilot CLI ' +
-        'lists or resumes a session also depends on its own internal index.'
+      'Note: this archives/restores the session folder and its shared session-store metadata ' +
+        'so Copilot session browsers can see restored sessions.'
     )
   );
 }
@@ -190,8 +197,11 @@ export async function historyPush(opts = {}) {
   const repoHistory = historyRepoDir(dir, agent.name);
   ensureDir(repoHistory);
   const meta = readHistoryMeta(repoHistory);
+  const storePath = sharedStorePath(agent.name);
 
   let copied = 0;
+  let indexed = 0;
+  let missingIndex = 0;
   for (const x of collected) {
     for (const f of x.files) {
       const dest = path.join(repoHistory, ...f.rel.split('/'));
@@ -217,6 +227,10 @@ export async function historyPush(opts = {}) {
       else delete meta.modes[key];
       copied++;
     }
+    const indexPayload = exportSessionIndex(storePath, x.id);
+    writeSessionIndexFile(repoHistory, indexPayload);
+    if (indexPayload.missing) missingIndex++;
+    else indexed++;
   }
   writeHistoryMeta(repoHistory, meta);
 
@@ -257,6 +271,14 @@ export async function historyPush(opts = {}) {
   }
 
   log.ok(`Pushed history for ${collected.length} session(s), ${fmtSize(totalBytes)}.`);
+  if (indexed) {
+    log.info(`Updated shared session-store metadata for ${indexed} session(s).`);
+  }
+  if (missingIndex) {
+    log.warn(
+      `${missingIndex} session(s) had no shared session-store rows; they were archived file-only.`
+    );
+  }
 }
 
 // ---- history pull ---------------------------------------------------------
@@ -286,10 +308,13 @@ export async function historyPull(opts = {}) {
   );
   const meta = readHistoryMeta(repoHistory);
   const base = agentBase(agent.name);
+  const storePath = sharedStorePath(agent.name);
   const localActive = new Set(
     listLocalSessions(agent.name).filter((s) => s.active).map((s) => s.id)
   );
   const backupRun = path.join(backupsDir(), tsStamp(), 'history', agent.name);
+  const indexPayloads = [];
+  let indexedMissing = 0;
 
   let wrote = 0;
   let overwritten = 0;
@@ -300,6 +325,9 @@ export async function historyPull(opts = {}) {
   log.plain('');
 
   for (const sel of selected) {
+    const indexPayload = readSessionIndexFile(repoHistory, sel.id);
+    if (indexPayload) indexPayloads.push(indexPayload);
+    else indexedMissing++;
     const sessActive = localActive.has(sel.id) && !opts.force;
     const sessRepo = path.join(repoHistory, agent.sessionsSubdir, sel.id);
     const dryEntries = [];
@@ -413,6 +441,22 @@ export async function historyPull(opts = {}) {
     return;
   }
 
+  let importedIndex = 0;
+  let missingIndex = 0;
+  if (indexPayloads.length) {
+    try {
+      const imported = importSessionIndexes(storePath, indexPayloads);
+      importedIndex = imported.imported;
+      missingIndex = imported.missing;
+    } catch (e) {
+      throw new UserError(
+        `Restored session files, but could not update ${storePath}.\n` +
+          'Close Copilot or any tool using the shared session DB, then retry.\n' +
+          `Underlying error: ${e.message}`
+      );
+    }
+  }
+
   pruneBackups();
 
   log.plain('');
@@ -428,6 +472,14 @@ export async function historyPull(opts = {}) {
         (skippedActive ? c.yellow(` ${skippedActive} active skipped.`) : '')
     );
     if (overwritten) log.info(`Backups of replaced files: ${c.dim(backupRun)}`);
+  }
+  if (importedIndex) {
+    log.info(`Updated shared session-store metadata for ${importedIndex} session(s): ${c.dim(storePath)}`);
+  }
+  if (missingIndex || indexedMissing) {
+    log.warn(
+      `${missingIndex + indexedMissing} session(s) were restored without shared session-store metadata.`
+    );
   }
   archiveNote();
 }

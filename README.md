@@ -28,7 +28,7 @@ and lays them back down in the right places on any OS.
   blocks any push containing token-shaped values.
 - 🌲 **Readable diffs** — `--dry-run` prints a per-agent file tree of exactly what changes.
 - 💾 **Non-destructive** — overwrites are backed up; local-only files are never deleted.
-- 📦 **Tiny** — one dependency, shells out to your existing `git` for auth.
+- 📦 **Small** — a lean CLI that shells out to your existing `git` for auth.
 
 ## Contents
 
@@ -252,15 +252,16 @@ How it stays safe:
   `~/.agent-sync/backups/<timestamp>/history/copilot/` exactly like a config `pull`.
 
 > [!NOTE]
-> This **archives and restores the on-disk session folder**. Whether the Copilot CLI then
-> *lists or resumes* a restored session also depends on its own internal index, which is
-> deliberately not synced. Treat it as reliable archive/restore, not a guaranteed "resume".
+> For **Copilot CLI**, history sync now carries both the on-disk session folder and the
+> matching rows from `~/.copilot/session-store.db`, so restored sessions show up in
+> tools like `copilot-starter` and Copilot's own session browsers on the target machine.
 
 ## Resume sessions across devboxes
 
-`agent-sync history` moves the session **files** between machines. To then *browse and
-resume* a restored session, pair it with a session launcher — a small TUI that lists your
-sessions and reopens the right one in the agent CLI:
+`agent-sync history` moves the session files **and, for Copilot, the shared session-store
+metadata** between machines. To browse and resume a restored session comfortably, pair it
+with a session launcher — a small TUI that lists your sessions and reopens the right one
+in the agent CLI:
 
 | Tool | For | Install | Launch |
 | --- | --- | --- | --- |

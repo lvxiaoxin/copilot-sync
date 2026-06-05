@@ -25,6 +25,7 @@ export const HISTORY_AGENTS = {
     label: 'GitHub Copilot CLI',
     base: DEFAULT_MANIFEST.copilot.base, // ~/.copilot
     sessionsSubdir: 'session-state', // ~/.copilot/session-state/<uuid>/
+    sharedStore: 'session-store.db', // ~/.copilot/session-store.db
     supported: true,
   },
   // Planned — layouts noted for reference; not enabled yet.
@@ -154,6 +155,11 @@ export function agentBase(agent = DEFAULT_HISTORY_AGENT) {
 export function sessionsRoot(agent = DEFAULT_HISTORY_AGENT) {
   const spec = specOf(agent);
   return path.join(expandHome(spec.base), spec.sessionsSubdir);
+}
+
+export function sharedStorePath(agent = DEFAULT_HISTORY_AGENT) {
+  const spec = specOf(agent);
+  return path.join(expandHome(spec.base), spec.sharedStore);
 }
 
 export function fmtSize(n) {
