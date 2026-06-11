@@ -5,7 +5,7 @@ import { log, c } from '../log.js';
 import { createPrompter } from '../prompt.js';
 import { loadConfig, saveConfig, repoDir, appHome } from '../config.js';
 import { ensureDir, rmrf, exists, assertInside } from '../fsutil.js';
-import { ensureGitAvailable, git, isGitRepo } from '../git.js';
+import { configureManagedRepo, ensureGitAvailable, git, isGitRepo } from '../git.js';
 
 // Expand "owner/repo" shorthand to a full GitHub HTTPS URL.
 function normalizeRemote(input) {
@@ -126,6 +126,8 @@ export async function onboard() {
       }
     }
   }
+
+  await configureManagedRepo(dir);
 
   // Make sure we are on the desired branch.
   await git(['checkout', '-B', branch], { cwd: dir }).catch(() => {});

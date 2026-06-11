@@ -38,6 +38,13 @@ export async function ensureGitAvailable() {
   }
 }
 
+export async function configureManagedRepo(cwd) {
+  // The sync store intentionally normalizes text via .gitattributes. Keep that
+  // policy independent from a user's global Windows Git line-ending settings.
+  await git(['config', '--local', 'core.autocrlf', 'false'], { cwd });
+  await git(['config', '--local', 'core.safecrlf', 'false'], { cwd });
+}
+
 export function isGitRepo(dir) {
   return fs.existsSync(path.join(dir, '.git'));
 }

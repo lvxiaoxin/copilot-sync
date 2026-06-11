@@ -1,6 +1,6 @@
 import { repoDir } from './config.js';
 import { exists, rmrf } from './fsutil.js';
-import { git, isGitRepo } from './git.js';
+import { configureManagedRepo, git, isGitRepo } from './git.js';
 import { log, c, UserError } from './log.js';
 
 // Ensure the local working clone exists and (optionally) is up to date with the
@@ -28,6 +28,8 @@ export async function ensureRepoReady(cfg, { update = false } = {}) {
       }
     }
   }
+
+  await configureManagedRepo(dir);
 
   // Always operate on the configured branch.
   await git(['checkout', '-B', cfg.branch], { cwd: dir }).catch(() => {});
