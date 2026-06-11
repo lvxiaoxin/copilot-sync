@@ -1,6 +1,6 @@
 {
   "name": "@lvxiaoxin/copilot-sync",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Cross-platform CLI to sync GitHub Copilot config and session history across devboxes via a GitHub repo.",
   "type": "module",
   "bin": {
