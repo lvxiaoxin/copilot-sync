@@ -65,7 +65,7 @@ export async function run(argv) {
 
   history
     .command('push')
-    .description('Archive this machine\'s Copilot sessions to the remote (additive).')
+    .description('Archive this machine\'s Copilot sessions using the configured history mode.')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--since <window>', 'Only sessions modified within a window, e.g. 7d, 2w, 1m.')
     .option('--dry-run', 'Show what would be pushed without changing anything.')
@@ -76,7 +76,7 @@ export async function run(argv) {
 
   history
     .command('pull')
-    .description('Restore Copilot sessions from the remote into this machine.')
+    .description('Restore Copilot sessions using the configured history mode.')
     .option('--session <id>', 'Only this session (full id or unique prefix).')
     .option('--dry-run', 'Show what would change locally without writing anything.')
     .option('--force', 'Overwrite even if the local session looks active.')

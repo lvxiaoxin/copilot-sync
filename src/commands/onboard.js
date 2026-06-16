@@ -1,11 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { log, c } from '../log.js';
+import { log, c, UserError } from '../log.js';
 import { createPrompter } from '../prompt.js';
 import { loadConfig, saveConfig, repoDir, appHome } from '../config.js';
 import { ensureDir, rmrf, exists, assertInside } from '../fsutil.js';
 import { configureManagedRepo, ensureGitAvailable, git, isGitRepo } from '../git.js';
+import {
+  HISTORY_MODE_OVERRIDE,
+  HISTORY_MODE_SYNC,
+  normalizeHistoryMode,
+} from '../history.js';
 
 // Expand "owner/repo" shorthand to a full GitHub HTTPS URL.
 function normalizeRemote(input) {
@@ -15,6 +20,15 @@ function normalizeRemote(input) {
     return `https://github.com/${v.replace(/\.git$/, '')}.git`;
   }
   return v;
+}
+
+function parseHistoryModeInput(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'sync' || value === 's') return HISTORY_MODE_SYNC;
+  if (value === 'override' || value === 'o' || value === 'backup') {
+    return HISTORY_MODE_OVERRIDE;
+  }
+  return '';
 }
 
 const GITATTRIBUTES = `# Managed by copilot-sync — keep line endings stable across OSes.
@@ -50,7 +64,7 @@ export async function onboard() {
   await ensureGitAvailable();
 
   const prompt = createPrompter();
-  let remote, branch, existingCfg;
+  let remote, branch, historyMode, existingCfg;
   try {
     const existing = loadConfig();
     existingCfg = existing;
@@ -78,6 +92,16 @@ export async function onboard() {
 
     branch = (await prompt.ask('Branch', { default: existing?.branch || 'main' })) || 'main';
 
+    const defaultHistoryMode = normalizeHistoryMode(existing?.history?.mode);
+    historyMode = '';
+    while (!historyMode) {
+      const raw = await prompt.ask('Session history mode (override/sync)', {
+        default: defaultHistoryMode,
+      });
+      historyMode = parseHistoryModeInput(raw);
+      if (!historyMode) log.error('Use "override" or "sync" for session history mode.');
+    }
+
   } finally {
     prompt.close();
   }
@@ -86,6 +110,7 @@ export async function onboard() {
     version: 1,
     remote,
     branch,
+    history: { ...(existingCfg?.history || {}), mode: historyMode },
     createdAt: existingCfg?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

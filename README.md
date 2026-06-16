@@ -19,18 +19,17 @@
 
 ---
 
-## Why
+## Overview
 
-You configure Copilot once — MCP servers, skills, prompts, agents, settings — then sit
-down at another devbox and have to rebuild the same setup. **copilot-sync** collects the
-shareable parts of `~/.copilot`, stores them in a GitHub repo you control, and restores
-them on any OS.
+Configure Copilot CLI once, then reuse that setup everywhere.
 
-- **`push` / `pull`** — one repo, many machines.
-- **Copilot-only by design** — no multi-agent branching or cross-tool path quirks.
-- **Safe by default** — curated allow-list, hard deny-list, and secret scanning.
-- **Readable dry runs** — file trees show exactly what would change.
-- **Session history** — opt-in archive/restore for Copilot CLI sessions.
+- Syncs shareable parts of `~/.copilot` across machines using a GitHub repo you own.
+- Keeps config sync and session history sync separate.
+- Defaults to safety: allow-list collection, deny-list blocking, secret scanning, backups.
+
+> [!IMPORTANT]
+> Use a **private** repository. Copilot config and session history can include personal
+> workflow details, prompts, file paths, and command output.
 
 ## Install
 
@@ -38,12 +37,9 @@ them on any OS.
 npm install -g @lvxiaoxin/copilot-sync
 ```
 
-**Requirements:** Node.js >= 18.17 and `git` on your `PATH`. Authentication reuses your
-existing git setup; copilot-sync never handles credentials directly.
+Requirements: Node.js >= 18.17 and `git` on `PATH`.
 
-## Quick start
-
-Create an empty private GitHub repo to act as your sync store, then:
+## 1-Minute Setup
 
 ```bash
 # First machine
@@ -56,173 +52,171 @@ copilot-sync onboard
 copilot-sync pull
 ```
 
+## Daily Usage
+
+### Update your shared config
+
+```bash
+copilot-sync push
+```
+
+### Apply latest shared config on this machine
+
+```bash
+copilot-sync pull
+```
+
+### Preview before changing anything
+
+```bash
+copilot-sync push --dry-run
+copilot-sync pull --dry-run
+```
+
+## Session History Usage
+
 > [!IMPORTANT]
-> Use a **private** repository. Copilot config and session history can include personal
-> workflow details, prompts, file paths, and command output.
+> Session history can contain secrets, file contents, and command output.
+> Only sync it to a private repository.
 
-## Commands
+> [!TIP]
+> For a better end-to-end session workflow, use this together with
+> [copilot-starter](https://github.com/lvxiaoxin/copilot-starter):
+> copilot-sync handles cross-machine session transport, while copilot-starter
+> focuses on search, preview, and quick resume.
 
-| Command | Description |
+Common flows:
+
+```bash
+# Inspect state
+copilot-sync history list
+
+# Upload local sessions
+copilot-sync history push
+
+# Upload only recent sessions
+copilot-sync history push --since 7d
+
+# Restore one session (full id or unique prefix)
+copilot-sync history pull --session 1a2b
+```
+
+## History Modes (Configured During Onboard)
+
+`copilot-sync onboard` asks for `history.mode`:
+
+| Mode | `history push` behavior | `history pull` behavior |
+| --- | --- | --- |
+| `override` (default) | Archive local sessions additively to remote | Restore remote sessions locally (backup before overwrite) |
+| `sync` | Only push `local-only` or `local-newer` sessions | Only pull `remote-only` or `remote-newer` sessions |
+
+Notes for `sync` mode:
+
+- Conflict unit is per session id.
+- Newer last-change timestamp wins for that command direction.
+- Active local sessions are skipped unless `--force` is used.
+- Replaced local files are still backed up under `~/.copilot-sync/backups/`.
+
+## Command Reference
+
+Core commands:
+
+| Command | Purpose |
 | --- | --- |
-| `copilot-sync onboard` | Configure the remote repo and branch. State is stored under `~/.copilot-sync/`. |
-| `copilot-sync status` | Show the configured remote and what this machine would sync. |
-| `copilot-sync push` | Collect shareable Copilot config, secret-scan it, commit, and push. |
-| `copilot-sync pull` | Pull remote config and apply it into `~/.copilot`, backing up overwrites first. |
+| `copilot-sync onboard` | Configure remote repo, branch, and history mode (`~/.copilot-sync/config.json`). |
+| `copilot-sync status` | Show remote, branch, history mode, and sync preview summary. |
+| `copilot-sync push` | Collect config, secret-scan, commit, and push. |
+| `copilot-sync pull` | Pull and apply config into `~/.copilot` with overwrite backups. |
 
-Shared flags:
+History commands:
+
+| Command | Purpose |
+| --- | --- |
+| `copilot-sync history list` | Show local/remote sessions and `synced` / `local-only` / `remote-only`. |
+| `copilot-sync history push` | Push session history using configured history mode. |
+| `copilot-sync history pull` | Pull session history using configured history mode. |
+
+## Flags
+
+Config sync flags:
 
 | Flag | Effect |
 | --- | --- |
-| `--dry-run` | Preview changes without writing or pushing. |
-| `--unsafe-allow` | Bypass deny-list / secret scanning for config sync. Discouraged. |
-
-## Session history
-
-> [!IMPORTANT]
-> Session history can contain **secrets, file contents, and command output** verbatim.
-> Only sync it to a private repository. This is opt-in and never runs as part of
-> normal `push` / `pull`.
-
-Copilot CLI stores session payloads in `~/.copilot/session-state/` and discovery/search
-metadata in `~/.copilot/session-store.db`. copilot-sync carries both pieces so restored
-sessions can appear in tools like `copilot-starter`.
-
-> [!TIP]
-> Use copilot-sync together with
-> [copilot-starter](https://github.com/lvxiaoxin/copilot-starter): copilot-sync moves the
-> sessions across machines, while copilot-starter gives you fuzzy search, previews, and
-> one-key resume.
-
-```console
-$ copilot-sync history list
-$ copilot-sync history push
-$ copilot-sync history push --since 7d
-$ copilot-sync history pull --session 1a2b
-```
-
-<details open>
-<summary><b>history list</b> — local vs remote sessions</summary>
-
-```console
-$ copilot-sync history list
-› Fetching latest from remote ...
-copilot-sync history
-Local sessions:  31  /Users/lvxiaoxin/.copilot/session-state
-Remote sessions: 7
-
-  ecd8804d-595d-49dd-b8a1-269f576aaf74  local-only   22MB, 2026-06-05 03:12
-  c7f7fde3-8b6f-407f-9170-a54403e223d5  local-only   348KB, 2026-06-05 03:12
-  cd60c9a8-1913-4a69-b2b9-5f67739d63c4  synced       1.3MB, 2026-06-05 04:01 active
-  4e4ea67c-4f07-49a8-a949-2411141abae3  synced       720B, 2026-06-05 03:12
-  …
-```
-</details>
-
-<details open>
-<summary><b>history push --since 7d</b> — scoped archive</summary>
-
-```console
-$ copilot-sync history push --since 7d
-copilot-sync history push  since: 7d
-! Session history can contain secrets, file contents, and command output.
-! Only sync to a private repository.
-
-4e4ea67c (2 file(s), 720B)
-ecd8804d (23 file(s), 22MB)
-f120e28f (9 file(s), 980KB)
-! 1 active session(s) skipped (recently modified). Use --force to include.
-! 21 session(s) older than --since 7d skipped.
-› Fetching latest from remote ...
-› Pushing to remote ...
-✓ Pushed history for 9 session(s), 28MB.
-Updated shared session-store metadata for 9 session(s).
-```
-</details>
-
-| Command | Description |
-| --- | --- |
-| `copilot-sync history list` | Show local and remote sessions with `synced`, `local-only`, or `remote-only` state. |
-| `copilot-sync history push` | Additively archive this machine's Copilot sessions to `history/copilot/`. |
-| `copilot-sync history pull` | Restore sessions into `~/.copilot/session-state/` and merge `session-store.db` metadata. |
+| `--dry-run` | Preview changes only. |
+| `--unsafe-allow` | Bypass deny-list/secret scan for config sync (not recommended). |
 
 History flags:
 
 | Flag | Effect |
 | --- | --- |
-| `--session <id>` | Limit to one session by full id or unique prefix. |
-| `--since <window>` | Only include local sessions modified within `7d`, `2w`, `1m`, `1y`, or a number of days. |
-| `--dry-run` | Preview per-session files without writing or pushing. |
-| `--yes` | Skip the one-time privacy confirmation on history push. |
-| `--force` | Include or overwrite sessions that look active. |
-| `--force-large` | Allow files approaching GitHub's 100MB limit. |
+| `--session <id>` | Target one session (full id or unique prefix). |
+| `--since <window>` | Push side filter for local sessions, e.g. `7d`, `2w`, `1m`, `1y`. |
+| `--dry-run` | Preview history changes only. |
+| `--yes` | Skip one-time privacy confirmation on history push. |
+| `--force` | Include/overwrite sessions that look active. |
+| `--force-large` | Allow files near GitHub 100MB limit. |
 
-## What gets synced
+## What Gets Synced
 
-Config sync is relative to `~/.copilot` and includes:
+Config sync (relative to `~/.copilot`):
 
 | Path | Purpose |
 | --- | --- |
-| `mcp-config.json` | MCP server definitions. |
-| `settings.json` | Copilot CLI settings. |
-| `skills/` | Installed or custom skills. |
-| `agents/` | Custom agents. |
-| `prompts/` | Prompt files. |
+| `mcp-config.json` | MCP server definitions |
+| `settings.json` | Copilot CLI settings |
+| `skills/` | Skills |
+| `agents/` | Custom agents |
+| `prompts/` | Prompt files |
 
-Runtime/session data is excluded from normal config sync and only handled by
-`copilot-sync history`.
+Session history sync additionally handles:
 
-## Safety model
+- `~/.copilot/session-state/`
+- `~/.copilot/session-store.db` related metadata
 
-copilot-sync treats your home directory as untrusted input:
+## Safety Model
 
-1. **Allow-list collection** — only the paths above are collected for config sync.
-2. **Hard deny-list** — auth config, session databases, logs, caches, backups, and runtime
-   state are blocked even if a custom manifest includes them.
-3. **Secret scanner** — token-shaped values and secret-like assignments abort config push.
-4. **Atomic writes and backups** — overwrites are backed up under
-   `~/.copilot-sync/backups/`; writes use temp-file + rename.
+1. Allow-list collection for config files.
+2. Hard deny-list for auth/runtime/sensitive paths.
+3. Secret scanning before config push.
+4. Atomic writes and timestamped backups before overwrite.
 
 ## Configuration
 
-Config lives at `~/.copilot-sync/config.json`. You can override the Copilot base or include
-list with an optional manifest:
+Path: `~/.copilot-sync/config.json`
 
 ```json
 {
   "remote": "git@github.com:you/copilot-store.git",
   "branch": "main",
+  "history": { "mode": "sync" },
   "manifest": {
     "copilot": { "include": ["mcp-config.json", "settings.json", "skills"] }
   }
 }
 ```
 
-Paths:
+`history.mode` supports `override` and `sync`.
+
+State directories:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.copilot-sync/config.json` | Remote, branch, and optional manifest. |
-| `~/.copilot-sync/repo` | Local working clone of the sync store. |
-| `~/.copilot-sync/backups/<timestamp>/` | Files replaced by recent pulls. |
+| `~/.copilot-sync/config.json` | User config |
+| `~/.copilot-sync/repo` | Local managed clone |
+| `~/.copilot-sync/backups/<timestamp>/` | Pull/restore backups |
 
-Set `COPILOT_SYNC_HOME` to override the state directory, which is useful for tests.
+Set `COPILOT_SYNC_HOME` to override state root.
 
 ## FAQ
 
-**Does it sync secrets or API keys?**  
-No. Known credential files and Copilot runtime databases are denied, and config pushes are
-secret-scanned before commit.
+**Does this sync secrets or API keys?**  
+No. Credential/runtime files are denied and config push is secret-scanned.
 
-**Will pulling delete local-only files?**  
-No. Pull writes files present in the remote store and backs up overwritten local files; it
-does not delete unrelated local files.
+**Will pull delete my local-only files?**  
+No. It writes files from the remote store and backs up overwritten files.
 
 **Does normal `push` include session history?**  
-No. Session history is opt-in through `copilot-sync history push`.
-
-**Why keep `copilot/` and `history/copilot/` in the remote if the tool is Copilot-only?**  
-Keeping those paths preserves compatibility with existing sync stores and leaves room for
-future metadata without flattening old remotes.
+No. Session history is only synced through `copilot-sync history ...`.
 
 ## License
 
@@ -230,17 +224,16 @@ future metadata without flattening old remotes.
 
 ## 中文
 
-### 为什么需要它
+### 概览
 
-你在一台机器上配置好了 GitHub Copilot CLI：MCP servers、skills、agents、prompts、
-settings。换到另一台开发机时又要重新配置。**copilot-sync** 会把 `~/.copilot`
-中适合同步的部分收集起来，存到你自己控制的 GitHub 仓库，并在其他机器恢复。
+在一台机器配置好 Copilot CLI 后，把同一套配置复用到所有开发机。
 
-- **`push` / `pull`** —— 一个仓库，多台机器。
-- **只支持 Copilot** —— 不再包含其他工具的分支逻辑。
-- **默认安全** —— allow-list、hard deny-list、secret scan。
-- **可读 dry run** —— 用文件树展示会发生什么。
-- **会话历史** —— 可选同步 Copilot CLI session history。
+- 通过你自己的 GitHub 仓库同步 `~/.copilot` 中可共享的内容。
+- 配置同步和会话历史同步分离。
+- 默认安全：allow-list、deny-list、secret scan、覆盖前备份。
+
+> [!IMPORTANT]
+> 请使用**私有仓库**。Copilot 配置和会话历史可能包含个人工作信息、提示词、路径和命令输出。
 
 ### 安装
 
@@ -248,11 +241,9 @@ settings。换到另一台开发机时又要重新配置。**copilot-sync** 会�
 npm install -g @lvxiaoxin/copilot-sync
 ```
 
-要求 Node.js >= 18.17，并且 `git` 在 `PATH` 中。认证复用你现有的 git 配置。
+要求：Node.js >= 18.17，且 `git` 在 `PATH` 中。
 
-### 快速开始
-
-准备一个空的私有 GitHub 仓库作为同步存储：
+### 1 分钟完成初始配置
 
 ```bash
 # 第一台机器
@@ -265,82 +256,169 @@ copilot-sync onboard
 copilot-sync pull
 ```
 
-### 命令
+### 日常使用
 
-| 命令 | 说明 |
-| --- | --- |
-| `copilot-sync onboard` | 配置远端仓库和分支，状态存放在 `~/.copilot-sync/`。 |
-| `copilot-sync status` | 查看当前配置以及本机会同步什么。 |
-| `copilot-sync push` | 收集可同步的 Copilot 配置，secret scan 后提交并推送。 |
-| `copilot-sync pull` | 拉取远端配置并写入 `~/.copilot`，覆盖前会备份。 |
+#### 更新共享配置
 
-### 会话历史同步
+```bash
+copilot-sync push
+```
+
+#### 在当前机器应用最新配置
+
+```bash
+copilot-sync pull
+```
+
+#### 先预览再执行
+
+```bash
+copilot-sync push --dry-run
+copilot-sync pull --dry-run
+```
+
+### 会话历史使用
 
 > [!IMPORTANT]
 > 会话历史可能包含密钥、文件内容和命令输出。只建议同步到私有仓库。
 
-Copilot CLI 的会话内容在 `~/.copilot/session-state/`，共享索引在
-`~/.copilot/session-store.db`。copilot-sync 会同时携带这两部分，因此恢复后的
-会话能被 `copilot-starter` 等工具看到。
-
 > [!TIP]
-> 建议和 [copilot-starter](https://github.com/lvxiaoxin/copilot-starter) 搭配使用：
-> copilot-sync 负责跨机器同步会话，copilot-starter 负责模糊搜索、预览和一键恢复。
+> 想获得更好的整体使用体验，建议搭配
+> [copilot-starter](https://github.com/lvxiaoxin/copilot-starter)：
+> copilot-sync 负责跨机器传输会话，copilot-starter 负责检索、预览和快速恢复。
 
-```console
-$ copilot-sync history list
-$ copilot-sync history push
-$ copilot-sync history push --since 7d
-$ copilot-sync history pull --session 1a2b
+常用流程：
+
+```bash
+# 查看本地/远端会话状态
+copilot-sync history list
+
+# 上传本机会话
+copilot-sync history push
+
+# 只上传最近会话
+copilot-sync history push --since 7d
+
+# 恢复单个会话（完整 id 或唯一前缀）
+copilot-sync history pull --session 1a2b
 ```
 
-| 命令 | 说明 |
+### 历史模式（onboard 时配置）
+
+`copilot-sync onboard` 会让你选择 `history.mode`：
+
+| 模式 | `history push` 行为 | `history pull` 行为 |
+| --- | --- | --- |
+| `override`（默认） | 追加式归档本机会话到远端 | 从远端恢复到本地（覆盖前备份） |
+| `sync` | 仅推送 `local-only` 或 `local-newer` 会话 | 仅拉取 `remote-only` 或 `remote-newer` 会话 |
+
+`sync` 模式说明：
+
+- 冲突判断单位是会话 id。
+- 以最近变更时间较新的一侧为准（按当前命令方向执行）。
+- 本地活跃会话默认跳过，可用 `--force` 覆盖。
+- 本地被替换文件仍会备份到 `~/.copilot-sync/backups/`。
+
+### 命令参考
+
+核心命令：
+
+| 命令 | 用途 |
 | --- | --- |
-| `copilot-sync history list` | 展示本地和远端会话，以及 `synced`、`local-only`、`remote-only` 状态。 |
-| `copilot-sync history push` | 追加式归档本机 Copilot 会话到 `history/copilot/`。 |
-| `copilot-sync history pull` | 恢复会话到 `~/.copilot/session-state/`，并合并 `session-store.db` 元数据。 |
+| `copilot-sync onboard` | 配置远端仓库、分支和 history mode（写入 `~/.copilot-sync/config.json`）。 |
+| `copilot-sync status` | 查看远端、分支、history mode 和同步概览。 |
+| `copilot-sync push` | 收集配置、secret scan、提交并推送。 |
+| `copilot-sync pull` | 拉取并写入 `~/.copilot`，覆盖前备份。 |
 
-### 默认同步内容
+历史命令：
 
-普通配置同步相对于 `~/.copilot`：
+| 命令 | 用途 |
+| --- | --- |
+| `copilot-sync history list` | 显示本地/远端会话及 `synced` / `local-only` / `remote-only`。 |
+| `copilot-sync history push` | 按配置的 history mode 推送会话历史。 |
+| `copilot-sync history pull` | 按配置的 history mode 拉取会话历史。 |
+
+### 参数说明
+
+配置同步参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--dry-run` | 仅预览，不写入不推送。 |
+| `--unsafe-allow` | 配置同步时绕过 deny-list/secret scan（不推荐）。 |
+
+历史同步参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--session <id>` | 只处理一个会话（完整 id 或唯一前缀）。 |
+| `--since <window>` | push 侧本地会话窗口过滤，如 `7d`、`2w`、`1m`、`1y`。 |
+| `--dry-run` | 仅预览历史同步变更。 |
+| `--yes` | 跳过 history push 的一次性隐私确认。 |
+| `--force` | 包含或覆盖看起来仍在活跃的会话。 |
+| `--force-large` | 允许接近 GitHub 100MB 限制的大文件。 |
+
+### 同步内容
+
+配置同步（相对于 `~/.copilot`）：
 
 | 路径 | 用途 |
 | --- | --- |
-| `mcp-config.json` | MCP server 配置。 |
-| `settings.json` | Copilot CLI 设置。 |
-| `skills/` | 技能。 |
-| `agents/` | 自定义 agents。 |
-| `prompts/` | Prompt 文件。 |
+| `mcp-config.json` | MCP server 定义 |
+| `settings.json` | Copilot CLI 设置 |
+| `skills/` | 技能 |
+| `agents/` | 自定义 agents |
+| `prompts/` | Prompt 文件 |
 
-运行时数据和会话数据不会被普通 `push` 同步，只能通过 `copilot-sync history` 显式处理。
+会话历史同步额外处理：
 
-### 配置
+- `~/.copilot/session-state/`
+- `~/.copilot/session-store.db` 相关元数据
 
-配置文件在 `~/.copilot-sync/config.json`。可选 `manifest` 可以覆盖 Copilot base
-或 include 列表：
+### 安全模型
+
+1. 配置文件使用 allow-list 收集。
+2. 认证/运行时/敏感路径使用 hard deny-list 拦截。
+3. 配置 push 前执行 secret scan。
+4. 覆盖前做原子写入和时间戳备份。
+
+### 配置文件
+
+路径：`~/.copilot-sync/config.json`
 
 ```json
 {
   "remote": "git@github.com:you/copilot-store.git",
   "branch": "main",
+  "history": { "mode": "sync" },
   "manifest": {
     "copilot": { "include": ["mcp-config.json", "settings.json", "skills"] }
   }
 }
 ```
 
-可以用 `COPILOT_SYNC_HOME` 覆盖状态目录，方便测试。
+`history.mode` 支持 `override` 和 `sync`。
+
+状态目录：
+
+| 路径 | 用途 |
+| --- | --- |
+| `~/.copilot-sync/config.json` | 用户配置 |
+| `~/.copilot-sync/repo` | 本地托管克隆 |
+| `~/.copilot-sync/backups/<timestamp>/` | pull/restore 备份 |
+
+可通过 `COPILOT_SYNC_HOME` 覆盖状态目录根路径。
 
 ### FAQ
 
-**会同步 secrets / API keys 吗？**  
-不会。已知凭据文件和 Copilot 运行时数据库会被 deny-list 拦截，配置 push 前还会做 secret scan。
+**会同步 secrets 或 API keys 吗？**  
+不会。凭据/运行时文件会被拦截，配置 push 前会做 secret scan。
 
 **`pull` 会删除本地独有文件吗？**  
-不会。它只写远端仓库里存在的文件，并在覆盖前备份。
+不会。它只写入远端仓库中的文件，并在覆盖前备份。
 
-**普通 `push` 会带上 session history 吗？**  
-不会。会话历史必须显式运行 `copilot-sync history push`。
+**普通 `push` 会带上会话历史吗？**  
+不会。会话历史仅通过 `copilot-sync history ...` 同步。
 
 ### 许可证
 

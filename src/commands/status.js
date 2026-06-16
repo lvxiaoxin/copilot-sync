@@ -5,6 +5,7 @@ import { resolveManifest } from '../manifest.js';
 import { collectAgent } from '../collect.js';
 import { exists } from '../fsutil.js';
 import { isGitRepo } from '../git.js';
+import { normalizeHistoryMode } from '../history.js';
 
 export async function status() {
   const cfg = loadConfig();
@@ -18,6 +19,7 @@ export async function status() {
 
   log.info(`Remote:  ${c.bold(cfg.remote)}`);
   log.info(`Branch:  ${c.bold(cfg.branch)}`);
+  log.info(`History: ${c.bold(normalizeHistoryMode(cfg.history?.mode))}`);
   log.info(`Clone:   ${exists(repoDir()) && isGitRepo(repoDir()) ? c.green('present') : c.yellow('not cloned yet')} ${c.dim(repoDir())}`);
 
   const manifest = resolveManifest(cfg.manifest);

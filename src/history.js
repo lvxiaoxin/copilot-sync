@@ -19,6 +19,13 @@ export const SESSIONS_SUBDIR = 'session-state';
 export const SHARED_STORE = 'session-store.db';
 export const META_FILE = '.copilot-sync-meta.json';
 export const LEGACY_META_FILE = '.agent-sync-meta.json';
+export const HISTORY_MODE_OVERRIDE = 'override';
+export const HISTORY_MODE_SYNC = 'sync';
+
+export function normalizeHistoryMode(value) {
+  const mode = String(value || HISTORY_MODE_OVERRIDE).trim().toLowerCase();
+  return mode === HISTORY_MODE_SYNC ? HISTORY_MODE_SYNC : HISTORY_MODE_OVERRIDE;
+}
 
 export function resolveAgent(name = HISTORY_AGENT) {
   const key = String(name || HISTORY_AGENT).trim().toLowerCase();
@@ -198,7 +205,7 @@ export function resolveSelector(selector, items) {
 }
 
 // Collect the concrete files to sync for one local session.
-// Returns { id, active, files:[{rel,abs,mode,size}], symlinks, sensitive, denied }.
+// Returns { id, rel, active, mtimeMs, sizeBytes, fileCount, files:[{rel,abs,mode,size}], symlinks, sensitive, denied }.
 // `rel` is posix and relative to ~/.copilot, e.g. session-state/<id>/plan.md.
 export function collectSession(session) {
   const base = agentBase();
@@ -242,7 +249,18 @@ export function collectSession(session) {
     files.push({ rel, abs, mode: st.mode, size: st.size });
   }
 
-  return { id: session.id, active: session.active, files, symlinks, sensitive, denied };
+  return {
+    id: session.id,
+    rel: relPrefix,
+    active: session.active,
+    mtimeMs: session.mtimeMs || 0,
+    sizeBytes: session.sizeBytes || 0,
+    fileCount: session.fileCount || files.length,
+    files,
+    symlinks,
+    sensitive,
+    denied,
+  };
 }
 
 // List the sessions present in the remote clone's history tree.
@@ -269,22 +287,23 @@ export function readHistoryMeta(historyRepo) {
     if (!exists(p)) continue;
     try {
       const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-      return { version: 1, modes: j.modes || {} };
+      return { version: 1, modes: j.modes || {}, sessions: j.sessions || {} };
     } catch {
-      return { version: 1, modes: {} };
+      return { version: 1, modes: {}, sessions: {} };
     }
   }
-  return { version: 1, modes: {} };
+  return { version: 1, modes: {}, sessions: {} };
 }
 
 // Persist exec-bit modes. Always writes (even when empty) so that cleared
 // entries, e.g. a script that lost its +x bit, are not resurrected on pull.
 export function writeHistoryMeta(historyRepo, meta) {
   const modes = (meta && meta.modes) || {};
+  const sessions = (meta && meta.sessions) || {};
   ensureDir(historyRepo);
   writeFileAtomic(
     path.join(historyRepo, META_FILE),
-    JSON.stringify({ version: 1, modes }, null, 2) + '\n'
+    JSON.stringify({ version: 1, modes, sessions }, null, 2) + '\n'
   );
 }
 

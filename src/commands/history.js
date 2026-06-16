@@ -9,6 +9,7 @@ import {
   assertInside,
   writeFileAtomic,
   ensureDir,
+  rmrf,
   toPosix,
 } from '../fsutil.js';
 import { ensureGitAvailable, git, ensureIdentity } from '../git.js';
@@ -31,6 +32,8 @@ import {
   collectSession,
   readHistoryMeta,
   writeHistoryMeta,
+  normalizeHistoryMode,
+  HISTORY_MODE_SYNC,
   HARD_FILE_LIMIT,
   WARN_FILE_LIMIT,
   WARN_TOTAL,
@@ -39,6 +42,7 @@ import {
   exportSessionIndex,
   importSessionIndexes,
   readSessionIndexFile,
+  sessionIndexRel,
   writeSessionIndexFile,
 } from '../history-store.js';
 
@@ -91,10 +95,180 @@ function remoteFilesForSession(repoHistory, agent, session) {
   return files;
 }
 
+function parseTimestampMs(value) {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value <= 0) return 0;
+    return value < 100000000000 ? Math.round(value * 1000) : Math.round(value);
+  }
+  const raw = String(value).trim();
+  if (/^\d+$/.test(raw)) return parseTimestampMs(Number(raw));
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(raw)
+    ? raw.replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? '' : 'Z')
+    : raw;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatTimestamp(ms) {
+  if (!ms) return 'unknown';
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+function indexPayloadChangedMs(payload) {
+  if (!payload || payload.missing) return 0;
+  const candidates = [payload.session?.updated_at, payload.session?.created_at];
+  for (const row of payload.turns || []) candidates.push(row.timestamp);
+  for (const row of payload.checkpoints || []) candidates.push(row.created_at);
+  for (const row of payload.files || []) candidates.push(row.first_seen_at);
+  for (const row of payload.refs || []) candidates.push(row.created_at);
+  return Math.max(0, ...candidates.map(parseTimestampMs));
+}
+
+function localSessionChangedMs(session, storePath) {
+  let changedMs = session?.mtimeMs || 0;
+  if (!storePath || !session) return changedMs;
+  try {
+    changedMs = Math.max(changedMs, indexPayloadChangedMs(exportSessionIndex(storePath, session.id)));
+  } catch {
+    /* best effort */
+  }
+  return changedMs;
+}
+
+async function gitSessionChangedMs(repoDir, agent, sessionId) {
+  try {
+    const out = await git(
+      [
+        'log',
+        '-1',
+        '--format=%ct',
+        '--',
+        `history/${agent.name}/${agent.sessionsSubdir}/${sessionId}`,
+        `history/${agent.name}/${sessionIndexRel(sessionId)}`,
+      ],
+      { cwd: repoDir }
+    );
+    return parseTimestampMs(Number(out.trim()));
+  } catch {
+    return 0;
+  }
+}
+
+async function remoteSessionChangedMs(repoDir, repoHistory, agent, session, meta) {
+  const entry = meta.sessions?.[session.id];
+  const metaMs = parseTimestampMs(entry?.mtimeMs) || parseTimestampMs(entry?.lastChangedAt);
+  if (metaMs) return { changedMs: metaMs, source: 'metadata' };
+
+  const indexMs = indexPayloadChangedMs(readSessionIndexFile(repoHistory, session.id));
+  if (indexMs) return { changedMs: indexMs, source: 'session-store' };
+
+  return { changedMs: await gitSessionChangedMs(repoDir, agent, session.id), source: 'git' };
+}
+
+function sessionMetaEntry(session, changedMs, bytes) {
+  return {
+    lastChangedAt: changedMs ? new Date(changedMs).toISOString() : null,
+    mtimeMs: Math.round(changedMs || 0),
+    fileCount: session.files.length,
+    sizeBytes: bytes,
+    syncedAt: new Date().toISOString(),
+    host: os.hostname(),
+    platform: process.platform,
+  };
+}
+
+function clearSessionModes(meta, relPrefix) {
+  const prefix = `${toPosix(relPrefix)}/`;
+  for (const key of Object.keys(meta.modes || {})) {
+    if (key.startsWith(prefix)) delete meta.modes[key];
+  }
+}
+
+function stageLocalSessionInRepo(repoHistory, session, meta, changedMs) {
+  const sessRepo = path.join(repoHistory, ...session.rel.split('/'));
+  assertInside(repoHistory, sessRepo, 'history session dest');
+  const tmp = `${sessRepo}.copilot-sync-tmp-${process.pid}-${Date.now()}`;
+  assertInside(repoHistory, tmp, 'history session temp dest');
+  if (exists(tmp)) rmrf(tmp);
+
+  let copied = 0;
+  let bytes = 0;
+  try {
+    ensureDir(tmp);
+    for (const f of session.files) {
+      const relPrefix = `${session.rel}/`;
+      const treePath = f.rel.startsWith(relPrefix) ? f.rel.slice(relPrefix.length) : f.rel;
+      const dest = path.join(tmp, ...treePath.split('/'));
+      assertInside(tmp, dest, 'history session temp dest');
+      const buf = fs.readFileSync(f.abs);
+      const mode = f.mode & 0o777;
+      writeFileAtomic(dest, buf, mode);
+      copied++;
+      bytes += f.size;
+    }
+    if (exists(sessRepo)) rmrf(sessRepo);
+    ensureDir(path.dirname(sessRepo));
+    fs.renameSync(tmp, sessRepo);
+  } catch (e) {
+    if (exists(tmp)) rmrf(tmp);
+    throw e;
+  }
+
+  clearSessionModes(meta, session.rel);
+  for (const f of session.files) {
+    const mode = f.mode & 0o777;
+    if (mode & 0o111) meta.modes[toPosix(f.rel)] = mode.toString(8);
+  }
+  meta.sessions[session.id] = sessionMetaEntry(session, changedMs, bytes);
+  return { copied, bytes };
+}
+
+function restoreRemoteSessionToLocal(repoHistory, agent, session, meta, base, backupRun) {
+  const files = remoteFilesForSession(repoHistory, agent, session);
+  const destDir = path.join(base, ...session.rel.split('/'));
+  assertInside(base, destDir, 'history session dest');
+  const tmp = `${destDir}.copilot-sync-tmp-${process.pid}-${Date.now()}`;
+  assertInside(base, tmp, 'history session temp dest');
+  if (exists(tmp)) rmrf(tmp);
+
+  try {
+    ensureDir(tmp);
+    for (const item of files) {
+      const dest = path.join(tmp, ...item.treePath.split('/'));
+      assertInside(tmp, dest, 'history session temp dest');
+      const modeStr = meta.modes[toPosix(item.rel)];
+      const mode = modeStr ? parseInt(modeStr, 8) : undefined;
+      writeFileAtomic(dest, fs.readFileSync(item.src), mode);
+    }
+
+    const destExists = exists(destDir);
+    if (destExists) {
+      const bdest = path.join(backupRun, session.id);
+      try {
+        ensureDir(path.dirname(bdest));
+        fs.cpSync(destDir, bdest, { recursive: true, force: true, verbatimSymlinks: true });
+      } catch {
+        /* best effort */
+      }
+      rmrf(destDir);
+    }
+    ensureDir(path.dirname(destDir));
+    fs.renameSync(tmp, destDir);
+    return { fileCount: files.length, overwritten: destExists };
+  } catch (e) {
+    if (exists(tmp)) rmrf(tmp);
+    throw e;
+  }
+}
+
 // ---- history push ---------------------------------------------------------
 
 export async function historyPush(opts = {}) {
   const cfg = requireConfig();
+  if (normalizeHistoryMode(cfg.history?.mode) === HISTORY_MODE_SYNC) {
+    return historySyncMode(opts, { cfg, command: 'push' });
+  }
   await ensureGitAvailable();
   const agent = resolveAgent();
   const since = opts.since != null ? parseSince(opts.since) : null;
@@ -226,6 +400,7 @@ export async function historyPush(opts = {}) {
   let indexed = 0;
   let missingIndex = 0;
   for (const x of collected) {
+    const bytes = x.files.reduce((n, f) => n + f.size, 0);
     for (const f of x.files) {
       const dest = path.join(repoHistory, ...f.rel.split('/'));
       assertInside(repoHistory, dest, 'history dest');
@@ -250,12 +425,15 @@ export async function historyPush(opts = {}) {
       else delete meta.modes[key];
       copied++;
     }
+    let indexPayload = null;
     if (storePath) {
-      const indexPayload = exportSessionIndex(storePath, x.id);
+      indexPayload = exportSessionIndex(storePath, x.id);
       writeSessionIndexFile(repoHistory, indexPayload);
       if (indexPayload.missing) missingIndex++;
       else indexed++;
     }
+    const changedMs = Math.max(x.mtimeMs || 0, indexPayloadChangedMs(indexPayload));
+    meta.sessions[x.id] = sessionMetaEntry(x, changedMs, bytes);
   }
   writeHistoryMeta(repoHistory, meta);
 
@@ -306,10 +484,351 @@ export async function historyPush(opts = {}) {
   }
 }
 
+// ---- sync history mode ----------------------------------------------------
+
+async function historySyncMode(opts = {}, { cfg, command }) {
+  await ensureGitAvailable();
+  const agent = resolveAgent();
+  const isPushCommand = command === 'push';
+  const isPullCommand = command === 'pull';
+  const since = isPushCommand && opts.since != null ? parseSince(opts.since) : null;
+
+  log.plain(
+    c.bold(`copilot-sync history ${command}`) +
+      c.dim('  mode: sync') +
+      (since ? c.dim(`  since: ${opts.since}`) : '') +
+      (opts.dryRun ? c.dim('  (dry run)') : '')
+  );
+
+  const dir = await ensureRepoReady(cfg, { update: true });
+  const repoHistory = historyRepoDir(dir, agent.name);
+  const meta = readHistoryMeta(repoHistory);
+  const base = agentBase(agent.name);
+  const storePath = agent.sharedStore ? sharedStorePath(agent.name) : null;
+
+  const localSessions = listLocalSessions(agent.name);
+  const localById = new Map(localSessions.map((s) => [s.id, s]));
+  const remoteSessions = listRemoteSessions(repoHistory, agent.name);
+  const remoteById = new Map(remoteSessions.map((s) => [s.id, s]));
+  const items = [...new Set([...localById.keys(), ...remoteById.keys()])].map((id) => ({ id }));
+  const selected = resolveSelector(opts.session, items);
+
+  if (!selected.length) {
+    log.warn('No sessions found locally or in the remote.');
+    return;
+  }
+
+  const plans = [];
+  for (const item of selected) {
+    const local = localById.get(item.id) || null;
+    const remote = remoteById.get(item.id) || null;
+    const localChangedMs = local ? localSessionChangedMs(local, storePath) : 0;
+    const remoteTime = remote
+      ? await remoteSessionChangedMs(dir, repoHistory, agent, remote, meta)
+      : { changedMs: 0, source: 'none' };
+
+    if (local?.active && !opts.force) {
+      plans.push({ id: item.id, action: 'skip-active', local, remote, localChangedMs, remoteTime });
+      continue;
+    }
+
+    if (since != null && local && local.mtimeMs < since) {
+      plans.push({ id: item.id, action: 'skip-aged', local, remote, localChangedMs, remoteTime });
+      continue;
+    }
+
+    if (local && !remote) {
+      const collected = collectSession(local);
+      plans.push({ id: item.id, action: 'push', reason: 'local-only', local, collected, localChangedMs });
+      continue;
+    }
+
+    if (remote && !local) {
+      plans.push({ id: item.id, action: 'pull', reason: 'remote-only', remote, remoteTime });
+      continue;
+    }
+
+    if (localChangedMs > remoteTime.changedMs) {
+      const collected = collectSession(local);
+      plans.push({
+        id: item.id,
+        action: 'push',
+        reason: 'local-newer',
+        local,
+        remote,
+        collected,
+        localChangedMs,
+        remoteTime,
+      });
+      continue;
+    }
+
+    if (remoteTime.changedMs > localChangedMs) {
+      plans.push({
+        id: item.id,
+        action: 'pull',
+        reason: 'remote-newer',
+        local,
+        remote,
+        localChangedMs,
+        remoteTime,
+      });
+      continue;
+    }
+
+    plans.push({ id: item.id, action: 'unchanged', local, remote, localChangedMs, remoteTime });
+  }
+
+  const pushPlans = isPushCommand ? plans.filter((p) => p.action === 'push') : [];
+  const pullPlans = isPullCommand ? plans.filter((p) => p.action === 'pull') : [];
+  const oppositePlans = plans.filter((p) =>
+    (isPushCommand && p.action === 'pull') || (isPullCommand && p.action === 'push')
+  );
+  const activePlans = plans.filter((p) => p.action === 'skip-active');
+  const agedPlans = plans.filter((p) => p.action === 'skip-aged');
+  const unchangedPlans = plans.filter((p) => p.action === 'unchanged');
+  const pushFiles = pushPlans.flatMap((p) => p.collected.files);
+  const totalLocalBytes = pushFiles.reduce((n, f) => n + f.size, 0);
+  const localFileLimitHits = pushFiles.filter((f) => f.size >= HARD_FILE_LIMIT);
+  const localFileWarnings = pushFiles.filter(
+    (f) => f.size >= WARN_FILE_LIMIT && f.size < HARD_FILE_LIMIT
+  );
+
+  if (localFileLimitHits.length && !opts.forceLarge) {
+    log.plain('');
+    log.error("File(s) at/over GitHub's 100MB limit:");
+    for (const f of localFileLimitHits) log.plain(`  ${c.red(f.rel)} (${fmtSize(f.size)})`);
+    throw new UserError(
+      `Aborted. Remove the file(s) or pass ${c.bold('--force-large')} (push may be rejected by GitHub).`
+    );
+  }
+
+  for (const f of localFileWarnings) log.warn(`  large file: ${f.rel} (${fmtSize(f.size)})`);
+  if (totalLocalBytes >= WARN_TOTAL) {
+    log.warn(`Large push side of sync: ${fmtSize(totalLocalBytes)} across local-newer session file(s).`);
+  }
+
+  privacyReminder();
+  log.plain('');
+
+  for (const plan of plans) {
+    if (plan.action === 'push') {
+      const tag = plan.reason === 'local-only' ? 'local-only' : 'local newer';
+      log.info(
+        `${c.cyan(shortId(plan.id))}: ${c.green(isPushCommand ? 'push' : 'skip push')} ${c.dim(tag)} ` +
+          c.dim(`local ${formatTimestamp(plan.localChangedMs)}`) +
+          (plan.remoteTime ? c.dim(`, remote ${formatTimestamp(plan.remoteTime.changedMs)}`) : '')
+      );
+      for (const s of plan.collected.sensitive) log.warn(`  sensitive file excluded: ${s}`);
+    } else if (plan.action === 'pull') {
+      const tag = plan.reason === 'remote-only' ? 'remote-only' : 'remote newer';
+      log.info(
+        `${c.cyan(shortId(plan.id))}: ${c.blue(isPullCommand ? 'pull' : 'skip pull')} ${c.dim(tag)} ` +
+          c.dim(`remote ${formatTimestamp(plan.remoteTime.changedMs)}`) +
+          (plan.local ? c.dim(`, local ${formatTimestamp(plan.localChangedMs)}`) : '')
+      );
+    } else if (plan.action === 'skip-active') {
+      log.warn(
+        `${c.cyan(shortId(plan.id))}: skipped; local session looks active. Use ${c.bold('--force')}.`
+      );
+    } else if (plan.action === 'skip-aged') {
+      log.warn(
+        `${c.cyan(shortId(plan.id))}: skipped; older than ${c.bold('--since ' + opts.since)}.`
+      );
+    } else if (opts.dryRun) {
+      log.info(`${c.cyan(shortId(plan.id))}: ${c.dim('unchanged')}`);
+    }
+  }
+
+  if (opts.dryRun) {
+    log.plain('');
+    log.plain(
+      c.dim('Dry run — no changes written. ') +
+        [
+          pushPlans.length ? c.green(`${pushPlans.length} push`) : null,
+          pullPlans.length ? c.blue(`${pullPlans.length} pull`) : null,
+          oppositePlans.length ? c.dim(`${oppositePlans.length} need ${isPushCommand ? 'pull' : 'push'}`) : null,
+          activePlans.length ? c.yellow(`${activePlans.length} active skipped`) : null,
+          agedPlans.length ? c.yellow(`${agedPlans.length} older skipped`) : null,
+          c.dim(`${unchangedPlans.length} unchanged`),
+        ].filter(Boolean).join(c.dim(', ')) +
+        c.dim('.')
+    );
+    return;
+  }
+
+  if (pushPlans.length && !cfg.history?.acknowledged) {
+    if (!opts.yes) {
+      const p = createPrompter();
+      const ok = await p.confirm(
+        'Push session history to your remote? It may contain sensitive data',
+        false
+      );
+      p.close();
+      if (!ok) {
+        log.info('Aborted — nothing synced.');
+        return;
+      }
+    }
+    cfg.history = { ...(cfg.history || {}), acknowledged: true };
+    saveConfig(cfg);
+  }
+
+  if (pushPlans.length) ensureDir(repoHistory);
+
+  let pushedSessions = 0;
+  let pushedFiles = 0;
+  let pushedBytes = 0;
+  let indexed = 0;
+  let missingIndex = 0;
+  let failedPushes = 0;
+  const stagedPushPlans = [];
+
+  for (const plan of pushPlans) {
+    try {
+      const staged = stageLocalSessionInRepo(repoHistory, plan.collected, meta, plan.localChangedMs);
+      pushedSessions++;
+      pushedFiles += staged.copied;
+      pushedBytes += staged.bytes;
+      stagedPushPlans.push(plan);
+    } catch (e) {
+      failedPushes++;
+      log.warn(`  could not stage ${plan.id}: ${e.message} — skipped.`);
+      continue;
+    }
+
+    if (storePath) {
+      const indexPayload = exportSessionIndex(storePath, plan.id);
+      writeSessionIndexFile(repoHistory, indexPayload);
+      if (indexPayload.missing) missingIndex++;
+      else indexed++;
+    }
+  }
+
+  if (pushedSessions) writeHistoryMeta(repoHistory, meta);
+
+  let pushedRemote = false;
+  if (pushedSessions) {
+    const id = await ensureIdentity(dir);
+    if (id.usedFallback) {
+      log.warn('No git identity found; committing as "copilot-sync <copilot-sync@localhost>".');
+    }
+
+    await git(['add', '-A', '--', `history/${agent.name}`], { cwd: dir });
+    const status = (
+      await git(['status', '--porcelain', '--', `history/${agent.name}`], { cwd: dir })
+    ).trim();
+    if (status) {
+      const subject = `history sync: ${os.hostname()} (${process.platform}) ${new Date().toISOString()}`;
+      const body = stagedPushPlans.map((p) => `${p.id}: ${p.reason}`).join('\n');
+      await git(['commit', '-m', subject, '-m', body], { cwd: dir });
+
+      log.step('Pushing newer local sessions to remote ...');
+      try {
+        await git(['push', '-u', 'origin', cfg.branch], { cwd: dir, interactive: true });
+        pushedRemote = true;
+      } catch (e) {
+        throw new UserError(
+          `Push failed. No remote-newer sessions were applied locally yet. Check your access to ${cfg.remote}.\n${e.stderr || e.message}`
+        );
+      }
+    }
+  }
+
+  let pulledSessions = 0;
+  let pulledFiles = 0;
+  let overwrittenSessions = 0;
+  let skippedLocked = 0;
+  let indexedMissing = 0;
+  const backupRun = path.join(backupsDir(), tsStamp(), 'history', agent.name);
+  const indexPayloads = [];
+
+  for (const plan of pullPlans) {
+    try {
+      const restored = restoreRemoteSessionToLocal(repoHistory, agent, plan.remote, meta, base, backupRun);
+      pulledSessions++;
+      pulledFiles += restored.fileCount;
+      if (restored.overwritten) overwrittenSessions++;
+    } catch {
+      skippedLocked++;
+      log.warn(`  could not restore ${plan.id} (locked?). Close Copilot and retry.`);
+      continue;
+    }
+
+    if (storePath) {
+      const indexPayload = readSessionIndexFile(repoHistory, plan.id);
+      if (indexPayload) indexPayloads.push(indexPayload);
+      else indexedMissing++;
+    }
+  }
+
+  let importedIndex = 0;
+  if (indexPayloads.length) {
+    try {
+      const imported = importSessionIndexes(storePath, indexPayloads);
+      importedIndex = imported.imported;
+      indexedMissing += imported.missing;
+    } catch (e) {
+      throw new UserError(
+        `Restored session files, but could not update ${storePath}.\n` +
+          'Close Copilot or any tool using the shared session DB, then retry.\n' +
+          `Underlying error: ${e.message}`
+      );
+    }
+  }
+
+  pruneBackups();
+
+  log.plain('');
+  if (!pushedSessions && !pulledSessions) {
+    const hasSkipped = failedPushes || oppositePlans.length || agedPlans.length || activePlans.length;
+    const summary = hasSkipped
+      ? `No sessions synced (${unchangedPlans.length} unchanged).`
+      : `Everything already up to date (${unchangedPlans.length} unchanged).`;
+    (hasSkipped ? log.warn : log.ok)(
+      summary +
+        (failedPushes ? c.yellow(` ${failedPushes} push skipped.`) : '') +
+        (oppositePlans.length ? c.dim(` ${oppositePlans.length} need ${isPushCommand ? 'pull' : 'push'}.`) : '') +
+        (agedPlans.length ? c.yellow(` ${agedPlans.length} older than --since skipped.`) : '') +
+        (activePlans.length ? c.yellow(` ${activePlans.length} active session(s) skipped.`) : '')
+    );
+  } else {
+    log.ok(
+      `Synced ${pushedSessions} pushed + ${pulledSessions} pulled session(s).` +
+        (failedPushes ? c.yellow(` ${failedPushes} push skipped.`) : '') +
+        (skippedLocked ? c.yellow(` ${skippedLocked} skipped (locked).`) : '') +
+        (oppositePlans.length ? c.dim(` ${oppositePlans.length} need ${isPushCommand ? 'pull' : 'push'}.`) : '') +
+        (agedPlans.length ? c.yellow(` ${agedPlans.length} older than --since skipped.`) : '') +
+        (activePlans.length ? c.yellow(` ${activePlans.length} active skipped.`) : '')
+    );
+    if (pushedSessions) {
+      log.info(
+        `Pushed ${pushedFiles} file(s), ${fmtSize(pushedBytes)}` +
+          (pushedRemote ? '.' : ' (repo already had these bytes).')
+      );
+    }
+    if (pulledSessions) {
+      log.info(`Pulled ${pulledFiles} file(s) into ${c.dim(sessionsRoot(agent.name))}.`);
+      if (overwrittenSessions) log.info(`Backups of replaced sessions: ${c.dim(backupRun)}`);
+    }
+  }
+  if (indexed) log.info(`Updated remote session-store metadata for ${indexed} session(s).`);
+  if (importedIndex) {
+    log.info(`Updated local shared session-store metadata for ${importedIndex} session(s): ${c.dim(storePath)}`);
+  }
+  if (missingIndex || indexedMissing) {
+    log.warn(`${missingIndex + indexedMissing} session(s) synced without shared session-store metadata.`);
+  }
+  archiveNote();
+}
+
 // ---- history pull ---------------------------------------------------------
 
 export async function historyPull(opts = {}) {
   const cfg = requireConfig();
+  if (normalizeHistoryMode(cfg.history?.mode) === HISTORY_MODE_SYNC) {
+    return historySyncMode(opts, { cfg, command: 'pull' });
+  }
   await ensureGitAvailable();
   const agent = resolveAgent();
 
